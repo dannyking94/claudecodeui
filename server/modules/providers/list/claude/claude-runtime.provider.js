@@ -167,6 +167,10 @@ function mapCliOptionsToSDK(options = {}) {
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = { ...process.env };
 
+  // The CLI stamps this into every transcript record. Left unset, the SDK marks the
+  // session "sdk-ts", which Claude Code's VS Code extension filters out of its session list.
+  sdkOptions.env.CLAUDE_CODE_ENTRYPOINT ??= 'cli';
+
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
   // which does not reliably follow npm's shell wrappers like cross-spawn does.
   sdkOptions.pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH);
