@@ -393,8 +393,12 @@ export function handleShellConnection(
         const shellCommand = buildShellCommand(data, dependencies);
         const resumeSessionId = resolveResumeSessionId(data, dependencies);
         const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
+        // An empty command must still yield a usable terminal: `bash -c ''` runs an
+        // empty script and exits 0 immediately, killing the plain-shell tab.
         const shellArgs =
-          os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand];
+          os.platform() === 'win32'
+            ? (shellCommand ? ['-Command', shellCommand] : ['-NoLogo'])
+            : (shellCommand ? ['-c', shellCommand] : ['-i', '-l']);
         const termCols = readNumber(data.cols, 80);
         const termRows = readNumber(data.rows, 24);
         const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
