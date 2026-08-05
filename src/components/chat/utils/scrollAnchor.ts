@@ -17,6 +17,17 @@
 /** Distance in px from the bottom of the scroll range at which we consider the user "following" the conversation. */
 export const NEAR_BOTTOM_THRESHOLD_PX = 120;
 
+/**
+ * Hysteresis band for the follow/detach latch.
+ *
+ * A single threshold flaps: scrolling along it flips the latch (and the
+ * `isUserScrolledUp` state behind the scroll-to-bottom button) on every scroll
+ * event. Detaching and re-attaching at different distances means the state only
+ * changes on a deliberate move away from or back to the newest message.
+ */
+export const DETACH_BELOW_PX = 150;
+export const REATTACH_WITHIN_PX = 60;
+
 export interface ScrollAnchor {
   element: HTMLElement;
   /** Offset of the anchor's top edge from the container's top edge, in px. */

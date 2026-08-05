@@ -9,8 +9,11 @@ import type { ChatMessage } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import {
   captureScrollAnchor,
+  distanceFromBottom,
   isNearBottom as isNearBottomOf,
   restoreScrollAnchor,
+  DETACH_BELOW_PX,
+  REATTACH_WITHIN_PX,
   type ScrollAnchor,
 } from '../utils/scrollAnchor';
 
@@ -18,6 +21,12 @@ import { normalizedToChatMessages } from './useChatMessages';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
+/**
+ * Quiet period after the last scroll event before the viewport counts as
+ * settled. Long enough to bridge the gaps between coalesced scroll events
+ * during iOS momentum, short enough to feel immediate when you stop to read.
+ */
+const SCROLL_SETTLE_MS = 150;
 
 interface UseChatSessionStateArgs {
   selectedProject: Project | null;
@@ -145,6 +154,26 @@ export function useChatSessionState({
    * Suppressing follow for the whole gesture closes that window.
    */
   const isTouchingRef = useRef(false);
+  /**
+   * True while the viewport is still moving — finger down, or momentum still
+   * producing scroll events.
+   *
+   * Nothing may write `scrollTop` while this is set. Correcting the offset
+   * mid-flick fights the gesture, and on WebKit writing `scrollTop` during
+   * momentum disturbs the momentum itself. Both read as jitter.
+   */
+  const isScrollingRef = useRef(false);
+  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Set immediately before we assign `scrollTop` ourselves, so the `scroll`
+   * event it provokes is not mistaken for the user moving the viewport.
+   *
+   * Without this, following a live stream would suppress itself: each
+   * auto-scroll would look like user motion, restart the settle timer, and
+   * block the next one.
+   */
+  const programmaticScrollRef = useRef(false);
+  const programmaticResetRafRef = useRef(0);
   /** The element currently pinned while the user reads back through history. */
   const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
   /** Session the one-time initial scroll-to-bottom has already run for. */
@@ -342,6 +371,30 @@ export function useChatSessionState({
   const rewindMessages = useCallback((count: number) => setViewHiddenCount(count), []);
 
   /**
+   * Assign `scrollTop` and tag the resulting `scroll` event as ours.
+   *
+   * The flag is cleared on the next animation frame. Scroll events are
+   * dispatched before rAF callbacks within a frame, so `handleScroll` always
+   * observes it; the rAF is the fallback for a write that lands on the current
+   * offset and therefore fires no event at all.
+   */
+  const setScrollTop = useCallback((container: HTMLDivElement, value: number) => {
+    programmaticScrollRef.current = true;
+    if (programmaticResetRafRef.current) cancelAnimationFrame(programmaticResetRafRef.current);
+    programmaticResetRafRef.current = requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+      programmaticResetRafRef.current = 0;
+    });
+    container.scrollTop = value;
+  }, []);
+
+  /** True when nothing is moving the viewport and it is safe to adjust it. */
+  const isScrollSettled = useCallback(
+    () => !isTouchingRef.current && !isScrollingRef.current,
+    [],
+  );
+
+  /**
    * Scroll to the newest message.
    *
    * Auto-scroll callers must leave `force` unset so the user's detach latch is
@@ -356,8 +409,8 @@ export function useChatSessionState({
       userDetachedRef.current = false;
       scrollAnchorRef.current = null;
     }
-    container.scrollTop = container.scrollHeight;
-  }, []);
+    setScrollTop(container, container.scrollHeight);
+  }, [setScrollTop]);
 
   const scrollToBottomAndReset = useCallback(() => {
     scrollToBottom(true);
@@ -440,33 +493,77 @@ export function useChatSessionState({
 
     pendingInitialScrollRef.current = false;
 
-    if (isNearBottomOf(container)) {
+    // Deliberately does not capture an anchor. Capturing here ran a binary
+    // search of getBoundingClientRect() calls on every touchmove and wheel
+    // tick — a forced layout flush per event — and produced an offset that was
+    // already stale by the time the observer used it, because iOS delivers
+    // scroll positions behind the real ones during momentum. The anchor is
+    // taken once on settle instead.
+    const distance = distanceFromBottom(container);
+    if (distance > DETACH_BELOW_PX) {
+      userDetachedRef.current = true;
+    } else if (distance < REATTACH_WITHIN_PX) {
       // Back at the newest message — resume following the conversation.
       userDetachedRef.current = false;
       scrollAnchorRef.current = null;
-    } else {
-      userDetachedRef.current = true;
-      scrollAnchorRef.current = captureScrollAnchor(container);
     }
   }, []);
+
+  /**
+   * Runs once the viewport has stopped moving.
+   *
+   * This is the only place a fresh anchor is taken during normal scrolling, so
+   * it always reflects a position that is actually final.
+   */
+  const handleScrollSettled = useCallback(() => {
+    isScrollingRef.current = false;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (pendingInitialScrollRef.current || searchScrollActiveRef.current) return;
+
+    // Settling resolves the hysteresis band to a definite state. The band
+    // exists to stop the latch flapping *while* the viewport moves; carrying it
+    // past the stop would mean a deliberate 100px scroll up still counted as
+    // "following" and got snapped back to the newest message.
+    const following = distanceFromBottom(container) < REATTACH_WITHIN_PX;
+    userDetachedRef.current = !following;
+    setIsUserScrolledUp(!following);
+
+    if (following) {
+      // Absorb any growth that arrived while adjustments were suppressed.
+      scrollAnchorRef.current = null;
+      setScrollTop(container, container.scrollHeight);
+    } else {
+      scrollAnchorRef.current = captureScrollAnchor(container);
+    }
+  }, [setScrollTop]);
 
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    const nearBottom = isNearBottom();
-    setIsUserScrolledUp(!nearBottom);
+    // Our own writes must not be read back as user motion, or following a live
+    // stream would continuously re-arm the settle timer and stall itself.
+    const wasProgrammatic = programmaticScrollRef.current;
+    programmaticScrollRef.current = false;
 
-    // Keep the anchor tracking the viewport as it moves, including momentum
-    // scrolling after the finger has lifted. Never *set* the detach latch from
-    // here: `scroll` also fires for our own programmatic scrolls, and latching
-    // on those would strand the user mid-history.
-    if (nearBottom) {
+    if (!wasProgrammatic) {
+      isScrollingRef.current = true;
+      if (scrollSettleTimerRef.current) clearTimeout(scrollSettleTimerRef.current);
+      scrollSettleTimerRef.current = setTimeout(() => {
+        scrollSettleTimerRef.current = null;
+        handleScrollSettled();
+      }, SCROLL_SETTLE_MS);
+    }
+
+    // Only ever *clears* the latch. `scroll` fires for programmatic scrolls
+    // too, and latching on those would strand the user mid-history; setting it
+    // is handleUserScrollIntent's job.
+    if (distanceFromBottom(container) < REATTACH_WITHIN_PX) {
       userDetachedRef.current = false;
       scrollAnchorRef.current = null;
-    } else if (userDetachedRef.current) {
-      scrollAnchorRef.current = captureScrollAnchor(container);
     }
+    setIsUserScrolledUp(userDetachedRef.current);
 
     const scrolledNearTop = container.scrollTop < 100;
 
@@ -495,13 +592,14 @@ export function useChatSessionState({
       const didLoad = await loadOlderMessages(container);
       if (didLoad) topLoadLockRef.current = true;
     }
-  }, [hasMoreMessages, isNearBottom, loadOlderMessages]);
+  }, [handleScrollSettled, hasMoreMessages, loadOlderMessages]);
 
   useLayoutEffect(() => {
     const anchor = pendingScrollRestoreRef.current;
     const container = scrollContainerRef.current;
     if (!anchor || !container) return;
 
+    programmaticScrollRef.current = true;
     restoreScrollAnchor(container, anchor);
     pendingScrollRestoreRef.current = null;
 
@@ -528,6 +626,12 @@ export function useChatSessionState({
     wasNearTopRef.current = false;
     userDetachedRef.current = false;
     scrollAnchorRef.current = null;
+    isTouchingRef.current = false;
+    isScrollingRef.current = false;
+    if (scrollSettleTimerRef.current) {
+      clearTimeout(scrollSettleTimerRef.current);
+      scrollSettleTimerRef.current = null;
+    }
     setIsUserScrolledUp(false);
   }, [selectedProject?.projectId, selectedSession?.id]);
 
@@ -581,6 +685,7 @@ export function useChatSessionState({
         pendingInitialScrollRef.current = false;
         return;
       }
+      programmaticScrollRef.current = true;
       container.scrollTop = container.scrollHeight;
       if (container.scrollHeight === lastHeight) {
         stableCount++;
@@ -878,21 +983,29 @@ export function useChatSessionState({
     if (pendingInitialScrollRef.current || searchScrollActiveRef.current) return;
     if (isLoadingMoreRef.current || pendingScrollRestoreRef.current) return;
 
+    // The single most important guard here. While the viewport is in motion —
+    // finger down or momentum coasting — no correction is worth making: the
+    // user cannot perceive a shift they are already scrolling past, and writing
+    // scrollTop underneath them is what produced the jitter. Whatever needs
+    // adjusting is applied by handleScrollSettled the moment motion stops.
+    if (!isScrollSettled()) return;
+
     if (!userDetachedRef.current) {
-      // Never snap to the bottom mid-gesture, even from a position that still
-      // counts as "following".
-      if (!isTouchingRef.current) container.scrollTop = container.scrollHeight;
+      setScrollTop(container, container.scrollHeight);
       return;
     }
 
     const anchor = scrollAnchorRef.current;
     if (!anchor) return;
+
+    programmaticScrollRef.current = true;
     if (!restoreScrollAnchor(container, anchor)) {
       // The anchored message was unmounted (rewind, session refresh) — take a
       // fresh anchor rather than letting the viewport drift unmanaged.
+      programmaticScrollRef.current = false;
       scrollAnchorRef.current = captureScrollAnchor(container);
     }
-  }, []);
+  }, [isScrollSettled, setScrollTop]);
 
   // Synchronous pass for message arrivals: runs before paint, so a message
   // landing while the user reads history never produces a visible frame at the
@@ -952,6 +1065,14 @@ export function useChatSessionState({
       container.removeEventListener('touchend', onTouchEnd);
       container.removeEventListener('touchcancel', onTouchEnd);
       container.removeEventListener('wheel', handleUserScrollIntent);
+      if (scrollSettleTimerRef.current) {
+        clearTimeout(scrollSettleTimerRef.current);
+        scrollSettleTimerRef.current = null;
+      }
+      if (programmaticResetRafRef.current) {
+        cancelAnimationFrame(programmaticResetRafRef.current);
+        programmaticResetRafRef.current = 0;
+      }
     };
   }, [handleScroll, handleUserScrollIntent]);
 
