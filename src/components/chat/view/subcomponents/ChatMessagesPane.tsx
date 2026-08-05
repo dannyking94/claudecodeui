@@ -20,8 +20,12 @@ import ChatExportMenu from './ChatExportMenu';
 
 interface ChatMessagesPaneProps {
   scrollContainerRef: RefObject<HTMLDivElement>;
-  onWheel: () => void;
-  onTouchMove: () => void;
+  /**
+   * Wraps the rendered messages. useChatSessionState observes this element's
+   * height so it can re-anchor the viewport when content above the user's
+   * reading position finishes laying out.
+   */
+  messagesContentRef: RefObject<HTMLDivElement>;
   isLoadingSessionMessages: boolean;
   /** True while the viewed session has an active provider run in flight. */
   isProcessing?: boolean;
@@ -70,8 +74,7 @@ interface ChatMessagesPaneProps {
 
 function ChatMessagesPane({
   scrollContainerRef,
-  onWheel,
-  onTouchMove,
+  messagesContentRef,
   isLoadingSessionMessages,
   isProcessing = false,
   hasActivityIndicator = false,
@@ -159,8 +162,6 @@ function ChatMessagesPane({
   return (
     <div
       ref={scrollContainerRef}
-      onWheel={onWheel}
-      onTouchMove={onTouchMove}
       className={`chat-messages-pane relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-3 sm:pt-4 ${
         hasActivityIndicator ? 'pb-12 sm:pb-14' : 'pb-3 sm:pb-4'
       }`}
@@ -172,7 +173,7 @@ function ChatMessagesPane({
           </div>
         </div>
       )}
-      <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
+      <div ref={messagesContentRef} className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
           <div className="flex items-center justify-center space-x-2">

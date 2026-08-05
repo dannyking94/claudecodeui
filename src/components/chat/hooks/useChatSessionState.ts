@@ -7,6 +7,12 @@ import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
+import {
+  captureScrollAnchor,
+  isNearBottom as isNearBottomOf,
+  restoreScrollAnchor,
+  type ScrollAnchor,
+} from '../utils/scrollAnchor';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -28,11 +34,6 @@ interface UseChatSessionStateArgs {
   /** Highest live seq observed per session; sent as `lastSeq` on subscribe. */
   lastSeqRef: MutableRefObject<Map<string, number>>;
   sessionStore: SessionStore;
-}
-
-interface ScrollRestoreState {
-  height: number;
-  top: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -123,6 +124,31 @@ export function useChatSessionState({
   const [viewHiddenCount, setViewHiddenCount] = useState(0);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  /** Wraps the rendered messages; observed for height changes so lazy reflow can be absorbed. */
+  const messagesContentRef = useRef<HTMLDivElement>(null);
+  /**
+   * Hard latch: the user has taken manual control of the viewport and no
+   * automatic scroll may move it until they return to the bottom themselves.
+   *
+   * This is a ref, not state, because it has to flip *synchronously* inside a
+   * touch/wheel handler. `isUserScrolledUp` is the same signal as React state
+   * for rendering the scroll-to-bottom button, but state updates land a render
+   * later — long enough for an in-flight auto-scroll to yank the view away.
+   */
+  const userDetachedRef = useRef(false);
+  /**
+   * True between touchstart and touchend.
+   *
+   * The detach latch only trips once the user has moved past the near-bottom
+   * threshold, which leaves a window at the very start of a drag where they are
+   * pulling the list down while auto-follow is still allowed to snap it back.
+   * Suppressing follow for the whole gesture closes that window.
+   */
+  const isTouchingRef = useRef(false);
+  /** The element currently pinned while the user reads back through history. */
+  const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
+  /** Session the one-time initial scroll-to-bottom has already run for. */
+  const initialScrollKeyRef = useRef<string | null>(null);
   const wasNearTopRef = useRef(false);
   const [searchTarget, setSearchTarget] = useState<{ timestamp?: string; uuid?: string; snippet?: string } | null>(null);
   const searchScrollActiveRef = useRef(false);
@@ -130,10 +156,16 @@ export function useChatSessionState({
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
   const topLoadLockRef = useRef(false);
-  const pendingScrollRestoreRef = useRef<ScrollRestoreState | null>(null);
-  const pendingInitialScrollRef = useRef(true);
+  const pendingScrollRestoreRef = useRef<ScrollAnchor | null>(null);
+  /**
+   * True only while the per-session initial pin loop is actually running.
+   *
+   * Starts false on purpose: a brand-new session has no `selectedSession` until
+   * the backend creates one, so the loop never starts, and a ref that defaulted
+   * to true would suppress every auto-scroll for the whole first exchange.
+   */
+  const pendingInitialScrollRef = useRef(false);
   const messagesOffsetRef = useRef(0);
-  const scrollPositionRef = useRef({ height: 0, top: 0 });
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
@@ -192,7 +224,12 @@ export function useChatSessionState({
     searchScrollActiveRef.current = false;
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
-    pendingInitialScrollRef.current = true;
+    // Clearing the key is what re-arms the initial scroll; the loop owns the
+    // pending flag itself, so forcing it true here would only strand it set.
+    pendingInitialScrollRef.current = false;
+    initialScrollKeyRef.current = null;
+    userDetachedRef.current = false;
+    scrollAnchorRef.current = null;
     lastLoadedSessionKeyRef.current = null;
 
     if (loadAllOverlayTimerRef.current) {
@@ -304,14 +341,27 @@ export function useChatSessionState({
 
   const rewindMessages = useCallback((count: number) => setViewHiddenCount(count), []);
 
-  const scrollToBottom = useCallback(() => {
+  /**
+   * Scroll to the newest message.
+   *
+   * Auto-scroll callers must leave `force` unset so the user's detach latch is
+   * respected; only an explicit user gesture (the scroll-to-bottom button, or
+   * sending a message) may force it.
+   */
+  const scrollToBottom = useCallback((force = false) => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    if (!force && userDetachedRef.current) return;
+    if (force) {
+      userDetachedRef.current = false;
+      scrollAnchorRef.current = null;
+    }
     container.scrollTop = container.scrollHeight;
   }, []);
 
   const scrollToBottomAndReset = useCallback(() => {
-    scrollToBottom();
+    scrollToBottom(true);
+    setIsUserScrolledUp(false);
     if (allMessagesLoaded) {
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
       setAllMessagesLoaded(false);
@@ -322,8 +372,7 @@ export function useChatSessionState({
   const isNearBottom = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return false;
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    return scrollHeight - scrollTop - clientHeight < 50;
+    return isNearBottomOf(container);
   }, []);
 
   const loadOlderMessages = useCallback(
@@ -333,8 +382,6 @@ export function useChatSessionState({
       if (!hasMoreMessages || !selectedSession || !selectedProject) return false;
 
       isLoadingMoreRef.current = true;
-      const previousScrollHeight = container.scrollHeight;
-      const previousScrollTop = container.scrollTop;
 
       try {
         const slot = await sessionStore.fetchMore(selectedSession.id, {
@@ -355,7 +402,10 @@ export function useChatSessionState({
           return false;
         }
 
-        pendingScrollRestoreRef.current = { height: previousScrollHeight, top: previousScrollTop };
+        // Capture immediately before the state updates that prepend the page,
+        // so the anchor reflects the viewport the user is actually looking at
+        // rather than wherever it was when the fetch started.
+        pendingScrollRestoreRef.current = captureScrollAnchor(container);
         setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
         setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
@@ -376,12 +426,47 @@ export function useChatSessionState({
     [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
   );
 
+  /**
+   * Synchronous reaction to a real user gesture (touch or wheel).
+   *
+   * Runs before any React state update, so an auto-scroll queued by an
+   * arriving message cannot fire between the user's finger moving and
+   * `isUserScrolledUp` catching up. Also cancels the initial scroll-to-bottom
+   * pass, which otherwise re-pins the viewport every animation frame.
+   */
+  const handleUserScrollIntent = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    pendingInitialScrollRef.current = false;
+
+    if (isNearBottomOf(container)) {
+      // Back at the newest message — resume following the conversation.
+      userDetachedRef.current = false;
+      scrollAnchorRef.current = null;
+    } else {
+      userDetachedRef.current = true;
+      scrollAnchorRef.current = captureScrollAnchor(container);
+    }
+  }, []);
+
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const nearBottom = isNearBottom();
     setIsUserScrolledUp(!nearBottom);
+
+    // Keep the anchor tracking the viewport as it moves, including momentum
+    // scrolling after the finger has lifted. Never *set* the detach latch from
+    // here: `scroll` also fires for our own programmatic scrolls, and latching
+    // on those would strand the user mid-history.
+    if (nearBottom) {
+      userDetachedRef.current = false;
+      scrollAnchorRef.current = null;
+    } else if (userDetachedRef.current) {
+      scrollAnchorRef.current = captureScrollAnchor(container);
+    }
 
     const scrolledNearTop = container.scrollTop < 100;
 
@@ -413,49 +498,89 @@ export function useChatSessionState({
   }, [hasMoreMessages, isNearBottom, loadOlderMessages]);
 
   useLayoutEffect(() => {
-    if (!pendingScrollRestoreRef.current || !scrollContainerRef.current) return;
-    const { height, top } = pendingScrollRestoreRef.current;
+    const anchor = pendingScrollRestoreRef.current;
     const container = scrollContainerRef.current;
-    const newScrollHeight = container.scrollHeight;
-    container.scrollTop = top + Math.max(newScrollHeight - height, 0);
+    if (!anchor || !container) return;
+
+    restoreScrollAnchor(container, anchor);
     pendingScrollRestoreRef.current = null;
+
+    // Hand the anchor to the resize observer. A freshly prepended page keeps
+    // growing after this commit as its markdown, syntax highlighting, and
+    // images lay out; without continued maintenance the view would drift down
+    // by however much that late content adds.
+    userDetachedRef.current = true;
+    scrollAnchorRef.current = anchor;
   }, [chatMessages.length]);
 
   // Reset scroll/pagination state on session change
   useEffect(() => {
     if (!searchScrollActiveRef.current) {
-      pendingInitialScrollRef.current = true;
+      // Re-arm the once-per-session initial scroll. The sessionKey change would
+      // do this on its own; resetting explicitly keeps the two in step when a
+      // session id is reused (e.g. a resumed draft).
+      initialScrollKeyRef.current = null;
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
     }
+    pendingInitialScrollRef.current = false;
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
     wasNearTopRef.current = false;
+    userDetachedRef.current = false;
+    scrollAnchorRef.current = null;
     setIsUserScrolledUp(false);
   }, [selectedProject?.projectId, selectedSession?.id]);
 
+  const sessionKey = selectedSession?.id
+    ? `${selectedProject?.projectId ?? ''}::${selectedSession.id}`
+    : null;
+  const hasMessages = chatMessages.length > 0;
+
   // Initial scroll to bottom — robust to lazy content reflow.
-  // The previous implementation fired one scrollToBottom() at +200ms and
-  // cleared the pending flag. When markdown blocks, code highlighting, or
-  // images finished rendering after that window, scrollHeight grew but
-  // nothing re-anchored the viewport, leaving the chat tab visually
-  // "scrolled way up" with the latest assistant message off-screen.
   //
-  // This version re-scrolls every animation frame while scrollHeight is
-  // still growing, capped at ~1s (60 frames) or 3 consecutive stable
-  // frames. Cancels cleanly on session change via the pending flag.
+  // Opening a session has to survive markdown blocks, code highlighting, and
+  // images laying out over the following frames: each one grows scrollHeight
+  // after the fact, and a single scrollToBottom() would leave the newest
+  // message off-screen. So we re-pin every animation frame while the height is
+  // still moving, capped at ~1s (60 frames) or 3 consecutive stable frames.
+  //
+  // Two properties matter as much as the pinning itself:
+  //
+  //  - It runs ONCE per session. `chatMessages.length` is deliberately not a
+  //    dependency. It used to be, which meant every message arriving during a
+  //    live stream tore down and restarted the loop with a fresh 60-frame
+  //    budget and reset counters, so the ~1s cap never actually applied and the
+  //    viewport stayed welded to the bottom for as long as the model was
+  //    talking. `initialScrollKeyRef` is claimed up front so a re-render cannot
+  //    re-enter it.
+  //  - Any real touch or wheel gesture ends it immediately, via
+  //    `pendingInitialScrollRef` / `userDetachedRef`. Reassigning scrollTop 60
+  //    times a second underneath a finger is what made this feel like the page
+  //    was fighting back on iOS.
   useEffect(() => {
-    if (!pendingInitialScrollRef.current || !scrollContainerRef.current || isLoadingSessionMessages) return;
-    if (chatMessages.length === 0) { pendingInitialScrollRef.current = false; return; }
-    if (searchScrollActiveRef.current) { pendingInitialScrollRef.current = false; return; }
+    if (!sessionKey || isLoadingSessionMessages || !hasMessages) return;
+    if (!scrollContainerRef.current) return;
+    if (initialScrollKeyRef.current === sessionKey) return;
+    if (searchScrollActiveRef.current) {
+      initialScrollKeyRef.current = sessionKey;
+      pendingInitialScrollRef.current = false;
+      return;
+    }
+
+    initialScrollKeyRef.current = sessionKey;
+    pendingInitialScrollRef.current = true;
 
     const container = scrollContainerRef.current;
     let frame = 0;
-    let lastHeight = 0;
+    let lastHeight = -1;
     let stableCount = 0;
     let rafId = 0;
 
     const tick = () => {
-      if (!pendingInitialScrollRef.current || !scrollContainerRef.current) return;
+      if (!pendingInitialScrollRef.current || userDetachedRef.current) {
+        pendingInitialScrollRef.current = false;
+        return;
+      }
       container.scrollTop = container.scrollHeight;
       if (container.scrollHeight === lastHeight) {
         stableCount++;
@@ -472,9 +597,10 @@ export function useChatSessionState({
     };
     rafId = requestAnimationFrame(tick);
     return () => {
-      if (rafId) cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafId);
+      pendingInitialScrollRef.current = false;
     };
-  }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
+  }, [sessionKey, isLoadingSessionMessages, hasMessages]);
 
   // Main session loading effect — store-based
   useEffect(() => {
@@ -591,9 +717,11 @@ export function useChatSessionState({
         if (!isProcessing) {
           await sessionStore.refreshFromServer(selectedSession.id);
 
-          if (isNearBottom()) {
-            setTimeout(() => scrollToBottom(), 200);
-          }
+          // Deliberately unconditional: scrollToBottom() re-checks the detach
+          // latch when the timer fires. Deciding here instead would sample the
+          // user's position 200ms too early and scroll them away from whatever
+          // they moved to in the meantime.
+          setTimeout(() => scrollToBottom(), 200);
         }
       } catch (error) {
         console.error('Error reloading messages from external update:', error);
@@ -603,7 +731,6 @@ export function useChatSessionState({
     reloadExternalMessages();
   }, [
     externalMessageUpdate,
-    isNearBottom,
     scrollToBottom,
     selectedProject,
     selectedSession,
@@ -733,36 +860,100 @@ export function useChatSessionState({
     return chatMessages.slice(-visibleMessageCount);
   }, [chatMessages, visibleMessageCount]);
 
-  useEffect(() => {
+  /**
+   * Hold the viewport steady across a content change — the replacement for
+   * Safari's missing CSS scroll anchoring.
+   *
+   * Following the conversation and reading back through it are the two modes,
+   * and `userDetachedRef` picks between them synchronously. The previous
+   * implementation instead compared scrollHeight before and after the commit,
+   * but recorded "before" in an effect with no dependency array — which runs
+   * *after* React has already mutated the DOM, and was declared ahead of its
+   * own consumer, so the delta it computed was always zero and the
+   * compensation branch never did anything.
+   */
+  const maintainScrollPosition = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-    scrollPositionRef.current = { height: container.scrollHeight, top: container.scrollTop };
-  });
+    if (pendingInitialScrollRef.current || searchScrollActiveRef.current) return;
+    if (isLoadingMoreRef.current || pendingScrollRestoreRef.current) return;
 
-  useEffect(() => {
-    if (!scrollContainerRef.current || chatMessages.length === 0) return;
-    if (isLoadingMoreRef.current || isLoadingMoreMessages || pendingScrollRestoreRef.current) return;
-    if (searchScrollActiveRef.current) return;
-
-    if (!isUserScrolledUp) {
-      setTimeout(() => scrollToBottom(), 50);
+    if (!userDetachedRef.current) {
+      // Never snap to the bottom mid-gesture, even from a position that still
+      // counts as "following".
+      if (!isTouchingRef.current) container.scrollTop = container.scrollHeight;
       return;
     }
 
-    const container = scrollContainerRef.current;
-    const prevHeight = scrollPositionRef.current.height;
-    const prevTop = scrollPositionRef.current.top;
-    const newHeight = container.scrollHeight;
-    const heightDiff = newHeight - prevHeight;
-    if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+    const anchor = scrollAnchorRef.current;
+    if (!anchor) return;
+    if (!restoreScrollAnchor(container, anchor)) {
+      // The anchored message was unmounted (rewind, session refresh) — take a
+      // fresh anchor rather than letting the viewport drift unmanaged.
+      scrollAnchorRef.current = captureScrollAnchor(container);
+    }
+  }, []);
+
+  // Synchronous pass for message arrivals: runs before paint, so a message
+  // landing while the user reads history never produces a visible frame at the
+  // wrong offset.
+  useLayoutEffect(() => {
+    maintainScrollPosition();
+  }, [chatMessages.length, visibleMessageCount, maintainScrollPosition]);
+
+  // Asynchronous pass for everything that changes height *after* commit:
+  // streaming text, markdown, syntax highlighting, images decoding, tool
+  // results expanding. This is the case a message-count effect cannot see.
+  //
+  // `selectedProject?.projectId` is a dependency because ChatInterface returns
+  // a placeholder instead of the message pane until a project is picked — the
+  // observed element does not exist on the first pass, and without this the
+  // effect would never re-run to attach once it appears.
+  useEffect(() => {
+    const content = messagesContentRef.current;
+    if (!content || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => maintainScrollPosition());
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [maintainScrollPosition, selectedProject?.projectId]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-    container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [handleScroll]);
+
+    // `scroll` tracks where the viewport is; touch/wheel record that the user
+    // put it there. Keeping them separate is what lets a programmatic scroll
+    // coexist with the detach latch. All passive — none of these preventDefault,
+    // and a non-passive touch listener would stall scrolling on iOS.
+    const onTouchStart = () => {
+      isTouchingRef.current = true;
+      handleUserScrollIntent();
+    };
+    const onTouchEnd = () => {
+      isTouchingRef.current = false;
+      // Momentum continues after the finger lifts; `scroll` keeps the latch and
+      // anchor up to date from here, and re-attaches if it coasts to the bottom.
+      handleUserScrollIntent();
+    };
+
+    const options = { passive: true } as const;
+    container.addEventListener('scroll', handleScroll, options);
+    container.addEventListener('touchstart', onTouchStart, options);
+    container.addEventListener('touchmove', handleUserScrollIntent, options);
+    container.addEventListener('touchend', onTouchEnd, options);
+    container.addEventListener('touchcancel', onTouchEnd, options);
+    container.addEventListener('wheel', handleUserScrollIntent, options);
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      container.removeEventListener('touchstart', onTouchStart);
+      container.removeEventListener('touchmove', handleUserScrollIntent);
+      container.removeEventListener('touchend', onTouchEnd);
+      container.removeEventListener('touchcancel', onTouchEnd);
+      container.removeEventListener('wheel', handleUserScrollIntent);
+    };
+  }, [handleScroll, handleUserScrollIntent]);
 
   // "Load all" overlay visibility is driven by scroll-to-top in handleScroll;
   // timers are cleared on session change via the reset effect above.
@@ -781,8 +972,6 @@ export function useChatSessionState({
     }
 
     const container = scrollContainerRef.current;
-    const previousScrollHeight = container ? container.scrollHeight : 0;
-    const previousScrollTop = container ? container.scrollTop : 0;
 
     try {
       const slot = await sessionStore.fetchFromServer(requestSessionId, {
@@ -794,7 +983,7 @@ export function useChatSessionState({
 
       if (slot) {
         if (container) {
-          pendingScrollRestoreRef.current = { height: previousScrollHeight, top: previousScrollTop };
+          pendingScrollRestoreRef.current = captureScrollAnchor(container);
         }
 
         setHasMoreMessages(false);
@@ -856,9 +1045,11 @@ export function useChatSessionState({
     showLoadAllOverlay,
     createDiff,
     scrollContainerRef,
+    messagesContentRef,
     scrollToBottom,
     scrollToBottomAndReset,
     isNearBottom,
     handleScroll,
+    handleUserScrollIntent,
   };
 }

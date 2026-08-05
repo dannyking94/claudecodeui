@@ -66,7 +66,8 @@ interface UseChatComposerStateArgs {
   onInputFocusChange?: (focused: boolean) => void;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
-  scrollToBottom: () => void;
+  /** `force` overrides the user's scroll-detach latch; only pass it for explicit user gestures. */
+  scrollToBottom: (force?: boolean) => void;
   addMessage: (msg: ChatMessage) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
@@ -895,8 +896,10 @@ export function useChatComposerState({
         canInterrupt: true,
       });
 
+      // Forced: sending a message is an explicit request to see it, so it also
+      // clears any "reading history" latch the user left set.
       setIsUserScrolledUp(false);
-      setTimeout(() => scrollToBottom(), 100);
+      setTimeout(() => scrollToBottom(true), 100);
 
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
