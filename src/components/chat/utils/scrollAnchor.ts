@@ -32,6 +32,13 @@ export interface ScrollAnchor {
   element: HTMLElement;
   /** Offset of the anchor's top edge from the container's top edge, in px. */
   offset: number;
+  /**
+   * Container metrics at capture time — the fallback when `element` has been
+   * remounted by the time the anchor is restored (a revealed page can change
+   * a tool group's boundary, hence its key, hence its DOM).
+   */
+  scrollTop: number;
+  scrollHeight: number;
 }
 
 /**
@@ -84,7 +91,73 @@ export function captureScrollAnchor(container: HTMLElement): ScrollAnchor | null
   // Everything is scrolled past the top edge — anchor on the last message so a
   // reflow above it still holds the view steady.
   const anchor = found ?? messages[messages.length - 1];
-  return { element: anchor, offset: anchor.getBoundingClientRect().top - containerTop };
+  return {
+    element: anchor,
+    offset: anchor.getBoundingClientRect().top - containerTop,
+    scrollTop: container.scrollTop,
+    scrollHeight: container.scrollHeight,
+  };
+}
+
+/**
+ * Layout position of an element's top edge within the container's content,
+ * independent of the current scroll offset.
+ *
+ * Rect-based offsets conflate "content shifted" with "the user scrolled" —
+ * both move a rect. offsetTop is pure layout, so comparing it across time
+ * isolates content shifts even while the user is scrolling.
+ */
+export function getLayoutTop(container: HTMLElement, element: HTMLElement): number {
+  let top = 0;
+  let node: HTMLElement | null = element;
+  while (node && node !== container) {
+    top += node.offsetTop;
+    node = node.offsetParent as HTMLElement | null;
+  }
+  return top;
+}
+
+/** Layout positions of every message, snapshotted at the start of a scroll gesture. */
+export type MotionBaseline = Map<HTMLElement, number>;
+
+/**
+ * Snapshot every message's layout position at the moment a scroll gesture
+ * begins (one forced layout, offsetTop reads only — cheap relative to a rect
+ * per element).
+ *
+ * Nothing may write scrollTop while the viewport is in motion, so content
+ * that reflows above the viewport mid-gesture (images decoding, code
+ * highlighting) visibly drags the reading line with no way to correct it in
+ * the moment. The baseline makes the correction possible after the fact: once
+ * motion stops, whichever message is then at the top of the viewport can be
+ * compared against its snapshotted position, and the difference is exactly
+ * the growth above the reading line during the gesture — regardless of how
+ * far or in which direction the user scrolled.
+ */
+export function captureMotionBaseline(container: HTMLElement): MotionBaseline {
+  const baseline: MotionBaseline = new Map();
+  const messages = container.querySelectorAll<HTMLElement>('.chat-message');
+  for (const el of messages) {
+    baseline.set(el, getLayoutTop(container, el));
+  }
+  return baseline;
+}
+
+/**
+ * How far content above the current viewport shifted since the baseline was
+ * captured. Positive = grew (viewport must move down by the same amount to
+ * hold the reading line). 0 when it cannot be determined (no messages, or the
+ * topmost visible message did not exist at capture time).
+ */
+export function motionShiftAboveViewport(
+  container: HTMLElement,
+  baseline: MotionBaseline,
+): number {
+  const anchor = captureScrollAnchor(container);
+  if (!anchor) return 0;
+  const before = baseline.get(anchor.element);
+  if (before === undefined) return 0;
+  return getLayoutTop(container, anchor.element) - before;
 }
 
 /**

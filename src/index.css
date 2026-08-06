@@ -590,18 +590,31 @@
 
   .chat-message {
     contain: layout style paint;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 180px;
   }
 
-  .chat-message.assistant {
-    contain-intrinsic-size: auto 240px;
-  }
+  /* Skipping offscreen rendering trades exact message heights for the
+     contain-intrinsic-size estimates, and the swap back to real heights as
+     messages approach the viewport shifts everything around the reading
+     position. Chrome/Firefox absorb that shift with native CSS scroll
+     anchoring; WebKit has never implemented it, so on iOS/macOS Safari each
+     swap visibly jumps the chat mid-scroll — worst right after a page of
+     older messages loads, when every one of them is still placeholder-sized.
+     Only enable the optimization where the browser can anchor through it. */
+  @supports (overflow-anchor: auto) {
+    .chat-message {
+      content-visibility: auto;
+      contain-intrinsic-size: auto 180px;
+    }
 
-  .chat-message.user,
-  .chat-message.tool,
-  .chat-message.error {
-    contain-intrinsic-size: auto 96px;
+    .chat-message.assistant {
+      contain-intrinsic-size: auto 240px;
+    }
+
+    .chat-message.user,
+    .chat-message.tool,
+    .chat-message.error {
+      contain-intrinsic-size: auto 96px;
+    }
   }
 
   /* Mobile touch optimization and safe areas */

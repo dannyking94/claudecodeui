@@ -8,19 +8,32 @@ import type { SessionStore, NormalizedMessage } from '../../../stores/useSession
 import type { ChatMessage } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import {
+  captureMotionBaseline,
   captureScrollAnchor,
   distanceFromBottom,
   isNearBottom as isNearBottomOf,
+  motionShiftAboveViewport,
   restoreScrollAnchor,
   DETACH_BELOW_PX,
   REATTACH_WITHIN_PX,
+  type MotionBaseline,
   type ScrollAnchor,
 } from '../utils/scrollAnchor';
 
-import { normalizedToChatMessages } from './useChatMessages';
+import { createChatMessageConverter } from './useChatMessages';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
+/**
+ * Browsers with native CSS scroll anchoring (Chrome/Firefox) already hold the
+ * reading line through mid-scroll reflows in-engine; layering the manual
+ * motion-baseline correction on top would compensate the same shift twice.
+ * WebKit reports false and gets the manual pass.
+ */
+const HAS_NATIVE_SCROLL_ANCHORING =
+  typeof CSS !== 'undefined' &&
+  typeof CSS.supports === 'function' &&
+  CSS.supports('overflow-anchor: auto');
 /**
  * Quiet period after the last scroll event before the viewport counts as
  * settled. Long enough to bridge the gaps between coalesced scroll events
@@ -187,6 +200,38 @@ export function useChatSessionState({
   const topLoadLockRef = useRef(false);
   const pendingScrollRestoreRef = useRef<ScrollAnchor | null>(null);
   /**
+   * A fetched page of older messages whose reveal is waiting for the viewport
+   * to stop moving. Revealing mid-momentum computes the compensating
+   * scrollTop from main-thread scroll values that lag the compositor while it
+   * coasts — the write lands on a stale base and reads as a jump.
+   */
+  const pendingPrependCommitRef = useRef<(() => void) | null>(null);
+  /**
+   * scrollTop as of the last real scroll event. iOS delivers scroll events
+   * sparsely during momentum (worse while the main thread is busy committing
+   * new messages), so event silence alone cannot prove the viewport stopped;
+   * the settle timer re-checks this against the live position.
+   */
+  const lastScrollEventPosRef = useRef(0);
+  /** Layout snapshot from the start of the current scroll gesture (WebKit only). */
+  const motionBaselineRef = useRef<MotionBaseline | null>(null);
+  /**
+   * First message currently rendered (the window start), tracked by identity
+   * rather than index: prepending a page shifts every index by the page size,
+   * so an index can't distinguish "same window" from "reveal 20 more".
+   */
+  const renderedFirstMessageRef = useRef<ChatMessage | null>(null);
+  const renderWindowSessionRef = useRef<string | null>(null);
+  /**
+   * While a fetched older page waits for scroll-settle, the render window may
+   * not extend above this message. The store prepends the page as soon as the
+   * fetch resolves — possibly mid-gesture — and without this gate the slice
+   * would paint it immediately: a full page of content inserted above the
+   * viewport, uncompensated because no scrollTop write is allowed during
+   * motion, which reads as being thrown to the top of the chat.
+   */
+  const pendingPrependGateRef = useRef<ChatMessage | null>(null);
+  /**
    * True only while the per-session initial pin loop is actually running.
    *
    * Starts false on purpose: a brand-new session has no `selectedSession` until
@@ -253,6 +298,9 @@ export function useChatSessionState({
     searchScrollActiveRef.current = false;
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
+    pendingPrependCommitRef.current = null;
+    pendingPrependGateRef.current = null;
+    motionBaselineRef.current = null;
     // Clearing the key is what re-arms the initial scroll; the loop owns the
     // pending flag itself, so forcing it true here would only strand it set.
     pendingInitialScrollRef.current = false;
@@ -336,15 +384,19 @@ export function useChatSessionState({
     if (viewHiddenCount > 0) setViewHiddenCount(0);
   }
 
+  // One cache per chat surface: identity-stable ChatMessage output is what
+  // lets memo(MessageComponent) skip unchanged messages during streaming.
+  const convertToChatMessages = useMemo(() => createChatMessageConverter(), []);
+
   const chatMessages = useMemo(() => {
-    const all = normalizedToChatMessages(storeMessages);
+    const all = convertToChatMessages(storeMessages);
     // Show pending user message when no session data exists yet (new session, pre-backend-response)
     if (pendingUserMessage && all.length === 0) {
       return [pendingUserMessage];
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
-  }, [storeMessages, viewHiddenCount, pendingUserMessage]);
+  }, [convertToChatMessages, storeMessages, viewHiddenCount, pendingUserMessage]);
 
   /* ---------------------------------------------------------------- */
   /*  addMessage / clearMessages / rewindMessages                     */
@@ -431,6 +483,9 @@ export function useChatSessionState({
   const loadOlderMessages = useCallback(
     async (container: HTMLDivElement) => {
       if (!container || isLoadingMoreRef.current || isLoadingMoreMessages) return false;
+      // A fetched page is still waiting for the viewport to settle; loading
+      // another would advance the store past the un-revealed one.
+      if (pendingPrependCommitRef.current) return false;
       if (allMessagesLoadedRef.current) return false;
       if (!hasMoreMessages || !selectedSession || !selectedProject) return false;
 
@@ -455,28 +510,53 @@ export function useChatSessionState({
           return false;
         }
 
-        // Capture immediately before the state updates that prepend the page,
-        // so the anchor reflects the viewport the user is actually looking at
-        // rather than wherever it was when the fetch started.
-        pendingScrollRestoreRef.current = captureScrollAnchor(container);
-        setHasMoreMessages(slot.hasMore);
-        setTotalMessages(slot.total);
-        setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
-        if (!slot.hasMore) {
-          allMessagesLoadedRef.current = true;
-          setAllMessagesLoaded(true);
-          if (loadAllOverlayTimerRef.current) {
-            clearTimeout(loadAllOverlayTimerRef.current);
-            loadAllOverlayTimerRef.current = null;
+        const commitPrepend = () => {
+          // Lift the render gate in the same update that captures the anchor,
+          // so the page paints and the compensation lands in one commit.
+          pendingPrependGateRef.current = null;
+          // Capture immediately before the state updates that reveal the page,
+          // so the anchor reflects the viewport the user is actually looking at
+          // rather than wherever it was when the fetch started.
+          pendingScrollRestoreRef.current = captureScrollAnchor(container);
+          setHasMoreMessages(slot.hasMore);
+          setTotalMessages(slot.total);
+          setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
+          if (!slot.hasMore) {
+            allMessagesLoadedRef.current = true;
+            setAllMessagesLoaded(true);
+            if (loadAllOverlayTimerRef.current) {
+              clearTimeout(loadAllOverlayTimerRef.current);
+              loadAllOverlayTimerRef.current = null;
+            }
+            setShowLoadAllOverlay(false);
           }
-          setShowLoadAllOverlay(false);
+        };
+
+        // While the viewport is still rubber-banding or coasting at the top,
+        // hold the reveal for handleScrollSettled: the anchor capture and the
+        // compensating scrollTop write are only exact on a stationary
+        // viewport. The store has already prepended the page, so the render
+        // window must be gated at the currently-visible first message until
+        // then — the slice alone does not hide it.
+        if (isScrollSettled()) {
+          commitPrepend();
+        } else {
+          pendingPrependGateRef.current = renderedFirstMessageRef.current;
+          pendingPrependCommitRef.current = commitPrepend;
         }
         return true;
       } finally {
         isLoadingMoreRef.current = false;
       }
     },
-    [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
+    [
+      hasMoreMessages,
+      isLoadingMoreMessages,
+      isScrollSettled,
+      selectedProject,
+      selectedSession,
+      sessionStore,
+    ],
   );
 
   /**
@@ -519,7 +599,34 @@ export function useChatSessionState({
     isScrollingRef.current = false;
     const container = scrollContainerRef.current;
     if (!container) return;
-    if (pendingInitialScrollRef.current || searchScrollActiveRef.current) return;
+    if (pendingInitialScrollRef.current || searchScrollActiveRef.current) {
+      motionBaselineRef.current = null;
+      return;
+    }
+
+    // First: undo whatever reading-line shift accumulated while the viewport
+    // was in motion. Content reflowing above the viewport mid-gesture (images
+    // decoding, code highlighting) drags the line with no correction allowed
+    // at the time; comparing the now-topmost message against its
+    // gesture-start layout position recovers the exact delta.
+    const baseline = motionBaselineRef.current;
+    motionBaselineRef.current = null;
+    if (baseline) {
+      const shift = motionShiftAboveViewport(container, baseline);
+      if (Math.abs(shift) >= 1) {
+        setScrollTop(container, container.scrollTop + shift);
+      }
+    }
+
+    // Reveal a page of older messages that finished fetching while the
+    // viewport was still moving. The commit captures its own anchor and the
+    // layout effect restores it before paint, both on a now-stationary
+    // viewport, so the reveal is invisible.
+    const commitPrepend = pendingPrependCommitRef.current;
+    if (commitPrepend) {
+      pendingPrependCommitRef.current = null;
+      commitPrepend();
+    }
 
     // Settling resolves the hysteresis band to a definite state. The band
     // exists to stop the latch flapping *while* the viewport moves; carrying it
@@ -548,12 +655,31 @@ export function useChatSessionState({
     programmaticScrollRef.current = false;
 
     if (!wasProgrammatic) {
+      // Entering motion: snapshot message layout so the shift that content
+      // reflow causes above the viewport during this gesture can be undone at
+      // settle. Skipped where the engine anchors natively.
+      if (!isScrollingRef.current && !HAS_NATIVE_SCROLL_ANCHORING) {
+        motionBaselineRef.current = captureMotionBaseline(container);
+      }
       isScrollingRef.current = true;
+      lastScrollEventPosRef.current = container.scrollTop;
       if (scrollSettleTimerRef.current) clearTimeout(scrollSettleTimerRef.current);
-      scrollSettleTimerRef.current = setTimeout(() => {
+      const settleCheck = () => {
         scrollSettleTimerRef.current = null;
+        const el = scrollContainerRef.current;
+        // Event silence is not proof of stillness on iOS: momentum keeps
+        // moving the viewport between sparse events, and settling mid-flight
+        // would capture a stale anchor and then correct against the user's
+        // live scroll. If the position moved since the last event, keep
+        // waiting.
+        if (el && el.scrollTop !== lastScrollEventPosRef.current) {
+          lastScrollEventPosRef.current = el.scrollTop;
+          scrollSettleTimerRef.current = setTimeout(settleCheck, SCROLL_SETTLE_MS);
+          return;
+        }
         handleScrollSettled();
-      }, SCROLL_SETTLE_MS);
+      };
+      scrollSettleTimerRef.current = setTimeout(settleCheck, SCROLL_SETTLE_MS);
     }
 
     // Only ever *clears* the latch. `scroll` fires for programmatic scrolls
@@ -600,16 +726,30 @@ export function useChatSessionState({
     if (!anchor || !container) return;
 
     programmaticScrollRef.current = true;
-    restoreScrollAnchor(container, anchor);
+    if (!restoreScrollAnchor(container, anchor)) {
+      // The anchored element was remounted by the reveal: near the top of the
+      // window the topmost visible message usually sits in the first tool
+      // group, and revealing older messages moves that group's boundary —
+      // changing its key and replacing its DOM. Everything revealed sits
+      // above the old viewport, so the scrollHeight growth since capture is
+      // exactly the offset that keeps the reading position. Without this
+      // fallback the viewport silently kept its old numeric scrollTop — the
+      // top of the newly revealed content.
+      setScrollTop(container, anchor.scrollTop + (container.scrollHeight - anchor.scrollHeight));
+    }
     pendingScrollRestoreRef.current = null;
 
-    // Hand the anchor to the resize observer. A freshly prepended page keeps
-    // growing after this commit as its markdown, syntax highlighting, and
-    // images lay out; without continued maintenance the view would drift down
-    // by however much that late content adds.
+    // Hand a *fresh* anchor to the resize observer — the captured one may
+    // have just been replaced. A freshly prepended page keeps growing after
+    // this commit as its markdown, syntax highlighting, and images lay out;
+    // without continued maintenance the view would drift down by however much
+    // that late content adds.
     userDetachedRef.current = true;
-    scrollAnchorRef.current = anchor;
-  }, [chatMessages.length]);
+    scrollAnchorRef.current = captureScrollAnchor(container);
+    // visibleMessageCount is a dependency because a reveal deferred to
+    // scroll-settle changes only it: the store (and chatMessages.length) grew
+    // when the fetch resolved, renders earlier.
+  }, [chatMessages.length, visibleMessageCount, setScrollTop]);
 
   // Reset scroll/pagination state on session change
   useEffect(() => {
@@ -623,6 +763,9 @@ export function useChatSessionState({
     pendingInitialScrollRef.current = false;
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
+    pendingPrependCommitRef.current = null;
+    pendingPrependGateRef.current = null;
+    motionBaselineRef.current = null;
     wasNearTopRef.current = false;
     userDetachedRef.current = false;
     scrollAnchorRef.current = null;
@@ -865,6 +1008,11 @@ export function useChatSessionState({
     setSearchTarget(null);
 
     const scrollToTarget = async () => {
+      // Search navigation loads the full session below; a page reveal still
+      // waiting for scroll-settle would re-apply stale pagination state on
+      // top of it.
+      pendingPrependCommitRef.current = null;
+      pendingPrependGateRef.current = null;
       if (!allMessagesLoadedRef.current && selectedSession && selectedProject) {
           try {
             // Load all messages into the store for search navigation
@@ -961,9 +1109,32 @@ export function useChatSessionState({
   }, [selectedSession?.id]);
 
   const visibleMessages = useMemo(() => {
-    if (chatMessages.length <= visibleMessageCount) return chatMessages;
-    return chatMessages.slice(-visibleMessageCount);
-  }, [chatMessages, visibleMessageCount]);
+    let start = Math.max(0, chatMessages.length - visibleMessageCount);
+    if (renderWindowSessionRef.current !== activeSessionId) {
+      renderWindowSessionRef.current = activeSessionId;
+    } else {
+      // An older page fetched mid-gesture stays hidden until the settle-time
+      // commit reveals it together with its scroll compensation.
+      const gate = pendingPrependGateRef.current;
+      if (gate) {
+        const gateIndex = chatMessages.indexOf(gate);
+        if (gateIndex > start) start = gateIndex;
+      }
+      // While the user reads history the window start never advances: a plain
+      // slice(-count) drops the topmost rendered message each time a live
+      // message appends past the cap, shifting everything above the reading
+      // position — worst mid-scroll, where no compensation is allowed. The
+      // cap re-applies on the first update after the user returns to the
+      // bottom. (Revealing more history — a smaller start — is always
+      // allowed; that's the page-reveal and load-all path.)
+      if (userDetachedRef.current && renderedFirstMessageRef.current) {
+        const held = chatMessages.indexOf(renderedFirstMessageRef.current);
+        if (held >= 0 && held < start) start = held;
+      }
+    }
+    renderedFirstMessageRef.current = chatMessages[start] ?? null;
+    return start > 0 ? chatMessages.slice(start) : chatMessages;
+  }, [activeSessionId, chatMessages, visibleMessageCount]);
 
   /**
    * Hold the viewport steady across a content change — the replacement for
@@ -1048,6 +1219,12 @@ export function useChatSessionState({
       // Momentum continues after the finger lifts; `scroll` keeps the latch and
       // anchor up to date from here, and re-attaches if it coasts to the bottom.
       handleUserScrollIntent();
+      // A page that finished fetching during a motionless touch-hold has no
+      // scroll events to arm the settle timer, so its reveal would strand
+      // gated forever; run the settle pass directly once the finger lifts.
+      if (pendingPrependCommitRef.current && isScrollSettled()) {
+        handleScrollSettled();
+      }
     };
 
     const options = { passive: true } as const;
@@ -1074,7 +1251,7 @@ export function useChatSessionState({
         programmaticResetRafRef.current = 0;
       }
     };
-  }, [handleScroll, handleUserScrollIntent]);
+  }, [handleScroll, handleScrollSettled, handleUserScrollIntent, isScrollSettled]);
 
   // "Load all" overlay visibility is driven by scroll-to-top in handleScroll;
   // timers are cleared on session change via the reset effect above.
@@ -1085,6 +1262,10 @@ export function useChatSessionState({
     const requestSessionId = selectedSession.id;
     allMessagesLoadedRef.current = true;
     isLoadingMoreRef.current = true;
+    // Loading everything supersedes any page reveal still waiting for
+    // scroll-settle.
+    pendingPrependCommitRef.current = null;
+    pendingPrependGateRef.current = null;
     setIsLoadingAllMessages(true);
     setShowLoadAllOverlay(true);
     if (loadAllOverlayTimerRef.current) {

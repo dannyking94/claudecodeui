@@ -56,30 +56,20 @@ function parseTaskNotification(content: string): ParsedTaskNotification | null {
 }
 
 /**
- * Convert NormalizedMessage[] from the session store into ChatMessage[]
- * that the existing UI components expect.
+ * Convert one NormalizedMessage into the ChatMessage(s) the UI renders.
  *
- * Truly internal/system content is already filtered server-side. Some Claude
- * transcript artifacts such as local slash commands and compact summaries are
- * intentionally preserved and annotated so they can render like normal chat.
+ * `attachedToolResult` is the only cross-message input (a tool_use renders its
+ * result inline); everything else derives from `msg` alone. That is what makes
+ * the per-message cache in `createChatMessageConverter` sound: (msg identity,
+ * attached-result identity) fully determines the output.
  */
-export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
+function convertMessage(
+  msg: NormalizedMessage,
+  attachedToolResult: NormalizedMessage | null,
+): ChatMessage[] {
   const converted: ChatMessage[] = [];
 
-  // First pass: collect tool results for attachment
-  const toolResultMap = new Map<string, NormalizedMessage>();
-  const toolUseIds = new Set<string>();
-  for (const msg of messages) {
-    if (msg.kind === 'tool_use' && msg.toolId) {
-      toolUseIds.add(msg.toolId);
-    }
-
-    if (msg.kind === 'tool_result' && msg.toolId) {
-      toolResultMap.set(msg.toolId, msg);
-    }
-  }
-
-  for (const msg of messages) {
+  {
     const sharedMetadata = {
       displayText: msg.displayText,
       commandName: msg.commandName,
@@ -95,7 +85,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const content = msg.content || '';
         const images = Array.isArray(msg.images) && msg.images.length > 0 ? msg.images : undefined;
         const files = Array.isArray(msg.files) && msg.files.length > 0 ? msg.files : undefined;
-        if (!content.trim() && !images && !files) continue;
+        if (!content.trim() && !images && !files) break;
 
         if (msg.role === 'user') {
           // Parse task notifications
@@ -144,7 +134,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       }
 
       case 'tool_use': {
-        const tr = msg.toolResult || (msg.toolId ? toolResultMap.get(msg.toolId) : null);
+        const tr = attachedToolResult;
         const isSubagentContainer = msg.toolName === 'Task';
 
         // Build child tools from subagentTools
@@ -258,15 +248,11 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       // tool_result is handled via attachment to tool_use above
       case 'tool_result': {
-        if (msg.toolId && toolUseIds.has(msg.toolId)) {
-          break;
-        }
-
-        // A result with a toolId but no matching tool_use in the loaded set is
-        // almost always a tool_use/tool_result pair split across a pagination
-        // boundary (older page not loaded yet). Rendering its raw content here
-        // produces an unstyled dump that "fixes itself" once the older page
-        // loads; skip it and let it attach to its tool_use when that arrives.
+        // Any result with a toolId is skipped: either its tool_use is loaded
+        // (and renders it inline), or the pair is split across a pagination
+        // boundary (older page not loaded yet) and rendering the raw content
+        // here would produce an unstyled dump that "fixes itself" once the
+        // older page loads. Only orphan results with no toolId render standalone.
         if (msg.toolId) {
           break;
         }
@@ -292,4 +278,67 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
   }
 
   return converted;
+}
+
+/**
+ * Create a NormalizedMessage[] -> ChatMessage[] converter that reuses the
+ * previous conversion for every message that hasn't changed.
+ *
+ * The store replaces message objects on change and never mutates them, so
+ * (message identity, attached-tool-result identity) is a complete cache key.
+ * Identity-stable ChatMessage objects are what let memo(MessageComponent)
+ * skip unchanged messages — without this, every streaming chunk rebuilt every
+ * ChatMessage and re-rendered the entire visible list, which on mobile Safari
+ * janks the main thread hard enough to disturb scrolling.
+ *
+ * One converter per chat surface (the cache is a WeakMap keyed on store
+ * objects, so it frees itself as messages are replaced).
+ */
+export function createChatMessageConverter(): (messages: NormalizedMessage[]) => ChatMessage[] {
+  const cache = new WeakMap<
+    NormalizedMessage,
+    { attachedToolResult: NormalizedMessage | null; out: ChatMessage[] }
+  >();
+
+  return (messages: NormalizedMessage[]): ChatMessage[] => {
+    // First pass: collect tool results for attachment to their tool_use.
+    const toolResultMap = new Map<string, NormalizedMessage>();
+    for (const msg of messages) {
+      if (msg.kind === 'tool_result' && msg.toolId) {
+        toolResultMap.set(msg.toolId, msg);
+      }
+    }
+
+    const converted: ChatMessage[] = [];
+    for (const msg of messages) {
+      const attachedToolResult =
+        msg.kind === 'tool_use'
+          ? ((msg.toolResult as NormalizedMessage | undefined) ||
+              (msg.toolId ? toolResultMap.get(msg.toolId) : null) ||
+              null)
+          : null;
+
+      const cached = cache.get(msg);
+      if (cached && cached.attachedToolResult === attachedToolResult) {
+        if (cached.out.length > 0) converted.push(...cached.out);
+        continue;
+      }
+
+      const out = convertMessage(msg, attachedToolResult);
+      cache.set(msg, { attachedToolResult, out });
+      if (out.length > 0) converted.push(...out);
+    }
+    return converted;
+  };
+}
+
+/**
+ * Uncached one-shot conversion.
+ *
+ * Truly internal/system content is already filtered server-side. Some Claude
+ * transcript artifacts such as local slash commands and compact summaries are
+ * intentionally preserved and annotated so they can render like normal chat.
+ */
+export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
+  return createChatMessageConverter()(messages);
 }

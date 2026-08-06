@@ -36,7 +36,7 @@ export default function LoadAllMessagesOverlay({
 
   return (
     <div
-      className={`pointer-events-none sticky top-2 z-20 flex justify-center ${!isLoadingAllMessages ? 'load-all-overlay-auto-fade' : ''}`}
+      className={`pointer-events-none flex justify-center ${!isLoadingAllMessages ? 'load-all-overlay-auto-fade' : ''}`}
       style={!isLoadingAllMessages ? { animation: 'loadAllOverlayAutoFade 2500ms ease forwards' } : undefined}
     >
       <style>{loadAllOverlayAnimationStyle}</style>

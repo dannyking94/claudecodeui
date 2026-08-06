@@ -173,6 +173,20 @@ function ChatMessagesPane({
           </div>
         </div>
       )}
+      {/* Zero-height and outside the message flow on purpose: mounting an
+          in-flow element above the messages shifts the reading position by
+          its height every time it appears or auto-hides. */}
+      {chatMessages.length > 0 && (
+        <div className="pointer-events-none sticky top-2 z-20 h-0">
+          <LoadAllMessagesOverlay
+            showLoadAllOverlay={showLoadAllOverlay}
+            isLoadingAllMessages={isLoadingAllMessages}
+            loadAllJustFinished={loadAllJustFinished}
+            totalMessages={totalMessages}
+            onLoadAllMessages={loadAllMessages}
+          />
+        </div>
+      )}
       <div ref={messagesContentRef} className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
@@ -226,14 +240,6 @@ function ChatMessagesPane({
               )}
             </div>
           )}
-
-          <LoadAllMessagesOverlay
-            showLoadAllOverlay={showLoadAllOverlay}
-            isLoadingAllMessages={isLoadingAllMessages}
-            loadAllJustFinished={loadAllJustFinished}
-            totalMessages={totalMessages}
-            onLoadAllMessages={loadAllMessages}
-          />
 
           {/* Legacy message count indicator (for non-paginated view) */}
           {!hasMoreMessages && chatMessages.length > visibleMessageCount && (
