@@ -265,5 +265,22 @@
       "updateAvailable": "Mise à jour disponible",
       "closeSidebar": "Masquer la barre latérale"
     }
+  },
+  "systemStatus": {
+    "title": "Ordinateur",
+    "close": "Fermer",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "Mémoire",
+    "noGpu": "Aucun GPU NVIDIA détecté",
+    "unavailable": "L'état de l'hôte n'est pas disponible dans ce déploiement",
+    "serverOutdated": "Redémarrage du serveur requis pour activer l'état de l'hôte",
+    "waiting": "En attente de données…",
+    "windowStart": "60s",
+    "windowEnd": "maintenant",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

@@ -265,5 +265,22 @@
       "updateAvailable": "アップデートあり",
       "closeSidebar": "サイドバーを閉じる"
     }
+  },
+  "systemStatus": {
+    "title": "コンピューター",
+    "close": "閉じる",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "メモリ",
+    "noGpu": "NVIDIA GPU が見つかりません",
+    "unavailable": "この環境ではホストの状態を表示できません",
+    "serverOutdated": "ホストの状態を有効にするにはサーバーの再起動が必要です",
+    "waiting": "データを待機中…",
+    "windowStart": "60秒",
+    "windowEnd": "現在",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

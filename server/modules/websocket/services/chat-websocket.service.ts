@@ -4,6 +4,12 @@ import type { WebSocket } from 'ws';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import { providerModelsService } from '@/modules/providers/index.js';
+import {
+  startSystemStatsCollection,
+  stopSystemStatsCollectionIfIdle,
+  subscribeToSystemStats,
+  unsubscribeFromSystemStats,
+} from '@/modules/system/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import {
@@ -80,6 +86,8 @@ type ProviderRuntimeGateway = {
 type ChatWebSocketDependencies = {
   /** Central dispatcher for every provider SDK/CLI runtime. */
   runtime: ProviderRuntimeGateway;
+  /** Platform deployments do not expose host telemetry to tenants. */
+  isPlatform: boolean;
 };
 
 /**
@@ -364,6 +372,8 @@ function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDe
  * - `chat.abort`               { sessionId }
  * - `chat.subscribe`           { sessions: [{ sessionId, lastSeq? }] }
  * - `chat.permission-response` { requestId, allow, updatedInput?, message?, rememberEntry? }
+ * - `system.subscribe`         {} — starts 1 Hz host telemetry for this socket
+ * - `system.unsubscribe`       {} — stops it (also implied by close)
  *
  * Outbound protocol (server to client): every frame is `kind`-based — either
  * a provider `NormalizedMessage` (with `seq`) or a gateway event
@@ -377,6 +387,9 @@ export function handleChatConnection(
 ): void {
   console.log('[INFO] Chat WebSocket connected');
   connectedClients.add(ws);
+  // Sampling runs for as long as a browser is connected, so the status panel
+  // opens onto a full window rather than an empty one.
+  startSystemStatsCollection({ isPlatform: dependencies.isPlatform });
 
   const userId = readRequestUserId(request);
 
@@ -403,6 +416,12 @@ export function handleChatConnection(
         case 'chat.permission-response':
           handlePermissionResponse(data, dependencies);
           return;
+        case 'system.subscribe':
+          subscribeToSystemStats(ws, { isPlatform: dependencies.isPlatform });
+          return;
+        case 'system.unsubscribe':
+          unsubscribeFromSystemStats(ws);
+          return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);
           return;
@@ -417,5 +436,9 @@ export function handleChatConnection(
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');
     connectedClients.delete(ws);
+    // A client that navigates away or drops mid-stream never sends
+    // `system.unsubscribe`, so its stream is released here too.
+    unsubscribeFromSystemStats(ws);
+    stopSystemStatsCollectionIfIdle(connectedClients.size);
   });
 }

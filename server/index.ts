@@ -102,6 +102,7 @@ const wss = createWebSocketServer(server, {
     },
     chat: {
         runtime: providerRuntimeService,
+        isPlatform: IS_PLATFORM,
     },
     shell: {
         resolveProviderSessionId: (sessionId, provider) => {

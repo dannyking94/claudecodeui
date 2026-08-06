@@ -235,5 +235,22 @@
       "updateAvailable": "Доступно обновление",
       "closeSidebar": "Закрыть боковую панель"
     }
+  },
+  "systemStatus": {
+    "title": "Компьютер",
+    "close": "Закрыть",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "Память",
+    "noGpu": "Видеокарта NVIDIA не обнаружена",
+    "unavailable": "Состояние хоста недоступно в этой конфигурации",
+    "serverOutdated": "Для включения состояния хоста требуется перезапуск сервера",
+    "waiting": "Ожидание данных…",
+    "windowStart": "60 с",
+    "windowEnd": "сейчас",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

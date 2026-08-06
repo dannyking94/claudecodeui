@@ -58,5 +58,5 @@ export function createSystemModule(options: SystemModuleOptions): Router {
     logError: (message, detail) => console.error(message, detail ?? ''),
   });
 
-  return createSystemRouter(systemUpdateService);
+  return createSystemRouter(systemUpdateService, { isPlatform: options.isPlatform });
 }

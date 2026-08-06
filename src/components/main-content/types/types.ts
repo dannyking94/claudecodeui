@@ -72,6 +72,8 @@ export type MainContentHeaderProps = {
   shouldShowBrowserTab: boolean;
   isMobile: boolean;
   onMenuClick: () => void;
+  isSystemStatusOpen: boolean;
+  onToggleSystemStatus: () => void;
 };
 
 export type MainContentStateViewProps = {
