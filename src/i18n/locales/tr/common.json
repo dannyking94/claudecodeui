@@ -265,5 +265,22 @@
       "updateAvailable": "Güncelleme mevcut",
       "closeSidebar": "Kenar çubuğunu kapat"
     }
+  },
+  "systemStatus": {
+    "title": "Bilgisayar",
+    "close": "Kapat",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "Bellek",
+    "noGpu": "NVIDIA GPU bulunamadı",
+    "unavailable": "Bu kurulumda ana makine durumu kullanılamıyor",
+    "serverOutdated": "Ana makine durumunu etkinleştirmek için sunucuyu yeniden başlatın",
+    "waiting": "Veri bekleniyor…",
+    "windowStart": "60sn",
+    "windowEnd": "şimdi",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

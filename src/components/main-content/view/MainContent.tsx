@@ -17,6 +17,7 @@ import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
 import { TaskMasterPanel } from '../../task-master';
+import SystemStatusDrawer from '../../system-status/view/SystemStatusDrawer';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -61,6 +62,7 @@ function MainContent({
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
   const [browserUseEnabled, setBrowserUseEnabled] = useState(false);
+  const [isSystemStatusOpen, setIsSystemStatusOpen] = useState(false);
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
   const shouldShowBrowserTab = browserUseEnabled;
@@ -153,6 +155,8 @@ function MainContent({
         shouldShowBrowserTab={shouldShowBrowserTab}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
+        isSystemStatusOpen={isSystemStatusOpen}
+        onToggleSystemStatus={() => setIsSystemStatusOpen((open) => !open)}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -242,6 +246,12 @@ function MainContent({
           onToggleEditorExpand={handleToggleEditorExpand}
           projectPath={selectedProject.path}
           fillSpace={activeTab === 'files'}
+        />
+
+        <SystemStatusDrawer
+          isOpen={isSystemStatusOpen}
+          onClose={() => setIsSystemStatusOpen(false)}
+          isMobile={isMobile}
         />
       </div>
     </div>

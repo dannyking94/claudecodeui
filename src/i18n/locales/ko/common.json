@@ -265,5 +265,22 @@
       "updateAvailable": "업데이트 가능",
       "closeSidebar": "사이드바 닫기"
     }
+  },
+  "systemStatus": {
+    "title": "컴퓨터",
+    "close": "닫기",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "메모리",
+    "noGpu": "NVIDIA GPU를 찾을 수 없습니다",
+    "unavailable": "이 배포에서는 호스트 상태를 사용할 수 없습니다",
+    "serverOutdated": "호스트 상태를 사용하려면 서버를 다시 시작해야 합니다",
+    "waiting": "데이터를 기다리는 중…",
+    "windowStart": "60초",
+    "windowEnd": "현재",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

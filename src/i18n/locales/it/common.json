@@ -265,5 +265,22 @@
       "updateAvailable": "Aggiornamento disponibile",
       "closeSidebar": "Chiudi barra laterale"
     }
+  },
+  "systemStatus": {
+    "title": "Computer",
+    "close": "Chiudi",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "Memoria",
+    "noGpu": "Nessuna GPU NVIDIA rilevata",
+    "unavailable": "Lo stato dell'host non è disponibile in questa installazione",
+    "serverOutdated": "Riavvio del server necessario per attivare lo stato dell'host",
+    "waiting": "In attesa di dati…",
+    "windowStart": "60s",
+    "windowEnd": "ora",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

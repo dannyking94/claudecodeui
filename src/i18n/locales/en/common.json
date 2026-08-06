@@ -265,5 +265,22 @@
       "updateAvailable": "Update available",
       "closeSidebar": "Close sidebar"
     }
+  },
+  "systemStatus": {
+    "title": "Computer",
+    "close": "Close",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "noGpu": "No NVIDIA GPU detected",
+    "unavailable": "Host status is not available in this deployment",
+    "serverOutdated": "Server restart required to enable host status",
+    "waiting": "Waiting for data…",
+    "windowStart": "60s",
+    "windowEnd": "now",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }

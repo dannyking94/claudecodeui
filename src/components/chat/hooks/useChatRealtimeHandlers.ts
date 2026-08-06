@@ -164,6 +164,13 @@ export function useChatRealtimeHandlers({
         case 'loading_progress':
           return;
 
+        // Host telemetry — owned by the system-status drawer. It carries no
+        // session id, so without this the fallthrough below would treat it as
+        // a provider message and append it to whatever session is being
+        // viewed, once per second, evicting real messages at the 500-entry cap.
+        case 'system_stats':
+          return;
+
         default:
           break;
       }

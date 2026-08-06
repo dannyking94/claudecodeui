@@ -265,5 +265,22 @@
       "updateAvailable": "有可用更新",
       "closeSidebar": "關閉側邊欄"
     }
+  },
+  "systemStatus": {
+    "title": "電腦",
+    "close": "關閉",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "記憶體",
+    "noGpu": "未偵測到 NVIDIA GPU",
+    "unavailable": "此部署不提供主機狀態",
+    "serverOutdated": "需要重新啟動伺服器才能啟用主機狀態",
+    "waiting": "正在等待資料…",
+    "windowStart": "60秒",
+    "windowEnd": "現在",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
   }
 }
