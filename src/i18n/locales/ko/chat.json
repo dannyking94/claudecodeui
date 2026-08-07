@@ -136,6 +136,28 @@
       "willSend": "완료되면 전송됩니다",
       "edit": "대기 중인 메시지 편집",
       "delete": "대기 중인 메시지 삭제"
+    },
+    "claudeUsage": {
+      "label": "세션",
+      "ariaLabel": "Claude 플랜 사용량",
+      "session": "세션(5시간): {{percent}}% 사용",
+      "weekly": "주간: {{percent}}% 사용",
+      "resetsIn": "{{duration}} 후 초기화",
+      "plan": "{{plan}} 플랜",
+      "title": "플랜 사용량",
+      "eyebrow": "Claude 계정",
+      "subtitle": "이 호스트에 로그인된 계정의 남은 사용량입니다.",
+      "percentUsed": "{{percent}}% 사용",
+      "active": "사용 중",
+      "resetsSoon": "곧 초기화",
+      "close": "닫기",
+      "noBreakdown": "이 계정에서는 기간별 내역을 제공하지 않습니다.",
+      "footnote": "Claude가 계정 전체에 대해 보고한 값이며, 이 앱뿐 아니라 모든 클라이언트를 포함합니다.",
+      "kinds": {
+        "session": "세션(5시간)",
+        "weekly_all": "주간(전체 모델)",
+        "weekly_scoped": "주간"
+      }
     }
   },
   "providerSelection": {

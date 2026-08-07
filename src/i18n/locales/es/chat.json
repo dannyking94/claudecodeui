@@ -136,6 +136,28 @@
       "willSend": "Se enviará cuando esto termine",
       "edit": "Editar mensaje en cola",
       "delete": "Eliminar mensaje en cola"
+    },
+    "claudeUsage": {
+      "label": "sesión",
+      "ariaLabel": "Uso del plan de Claude",
+      "session": "Sesión (5 h): {{percent}} % usado",
+      "weekly": "Semanal: {{percent}} % usado",
+      "resetsIn": "se restablece en {{duration}}",
+      "plan": "Plan {{plan}}",
+      "title": "Uso del plan",
+      "eyebrow": "Cuenta de Claude",
+      "subtitle": "Cuota restante de la cuenta con sesión iniciada en este host.",
+      "percentUsed": "{{percent}} % usado",
+      "active": "activo",
+      "resetsSoon": "Restableciéndose ahora",
+      "close": "Cerrar",
+      "noBreakdown": "No hay desglose por ventana disponible para esta cuenta.",
+      "footnote": "Datos de Claude para toda la cuenta y todos los clientes, no solo esta aplicación.",
+      "kinds": {
+        "session": "Sesión (5 h)",
+        "weekly_all": "Semanal (todos los modelos)",
+        "weekly_scoped": "Semanal"
+      }
     }
   },
   "composer": {

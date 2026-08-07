@@ -1,5 +1,6 @@
 import express from 'express';
 
+import type { createClaudeUsageService } from './claude-usage.service.js';
 import type { createSystemUpdateService } from './system.service.js';
 
 type SystemRouterOptions = {
@@ -9,6 +10,7 @@ type SystemRouterOptions = {
 /** Creates thin system routes that delegate update execution to the service. */
 export function createSystemRouter(
   systemUpdateService: ReturnType<typeof createSystemUpdateService>,
+  claudeUsageService: ReturnType<typeof createClaudeUsageService>,
   options: SystemRouterOptions,
 ): express.Router {
   const router = express.Router();
@@ -32,6 +34,22 @@ export function createSystemRouter(
       supported: true,
       disabled: options.isPlatform,
     });
+  });
+
+  /**
+   * Remaining Claude plan allowance for the account signed in on this host.
+   *
+   * `capability` is echoed for the same reason as the probe above: an older
+   * server answers this unknown path with the SPA's index.html at status 200,
+   * so the marker — not the status code — is what proves the route exists.
+   */
+  router.get('/claude-usage', async (_request, response, next) => {
+    try {
+      const usage = await claudeUsageService.getUsage();
+      response.json({ capability: 'claude-usage', ...usage });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post('/update', async (_request, response, next) => {

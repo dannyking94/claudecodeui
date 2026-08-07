@@ -117,7 +117,29 @@
     "clickToChangeMode": "İzin modunu değiştirmek için tıkla (veya girdide Tab tuşuna bas)",
     "showAllCommands": "Tüm komutları göster",
     "clearInput": "Girdiyi temizle",
-    "scrollToBottom": "En alta git"
+    "scrollToBottom": "En alta git",
+    "claudeUsage": {
+      "label": "oturum",
+      "ariaLabel": "Claude plan kullanımı",
+      "session": "Oturum (5 sa): %{{percent}} kullanıldı",
+      "weekly": "Haftalık: %{{percent}} kullanıldı",
+      "resetsIn": "{{duration}} içinde sıfırlanır",
+      "plan": "{{plan}} planı",
+      "title": "Plan kullanımı",
+      "eyebrow": "Claude hesabı",
+      "subtitle": "Bu makinede oturum açmış hesabın kalan kotası.",
+      "percentUsed": "%{{percent}} kullanıldı",
+      "active": "etkin",
+      "resetsSoon": "Şimdi sıfırlanıyor",
+      "close": "Kapat",
+      "noBreakdown": "Bu hesap için pencere bazlı döküm mevcut değil.",
+      "footnote": "Claude tarafından yalnızca bu uygulama için değil, tüm istemciler dahil hesabın tamamı için bildirilir.",
+      "kinds": {
+        "session": "Oturum (5 sa)",
+        "weekly_all": "Haftalık (tüm modeller)",
+        "weekly_scoped": "Haftalık"
+      }
+    }
   },
   "providerSelection": {
     "title": "AI Asistanını Seç",

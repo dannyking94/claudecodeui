@@ -117,7 +117,29 @@
     "clickToChangeMode": "點擊變更權限模式（或在輸入框中按 Tab）",
     "showAllCommands": "顯示所有指令",
     "clearInput": "清空輸入",
-    "scrollToBottom": "捲動到底部"
+    "scrollToBottom": "捲動到底部",
+    "claudeUsage": {
+      "label": "工作階段",
+      "ariaLabel": "Claude 方案用量",
+      "session": "工作階段（5 小時）：已用 {{percent}}%",
+      "weekly": "每週：已用 {{percent}}%",
+      "resetsIn": "{{duration}} 後重設",
+      "plan": "{{plan}} 方案",
+      "title": "方案用量",
+      "eyebrow": "Claude 帳戶",
+      "subtitle": "此主機上已登入帳戶的剩餘額度。",
+      "percentUsed": "已用 {{percent}}%",
+      "active": "生效中",
+      "resetsSoon": "即將重設",
+      "close": "關閉",
+      "noBreakdown": "此帳戶沒有可用的分時段明細。",
+      "footnote": "由 Claude 依整個帳戶統計，涵蓋所有用戶端，而不只是本應用程式。",
+      "kinds": {
+        "session": "工作階段（5 小時）",
+        "weekly_all": "每週（所有模型）",
+        "weekly_scoped": "每週"
+      }
+    }
   },
   "thinkingMode": {
     "selector": {

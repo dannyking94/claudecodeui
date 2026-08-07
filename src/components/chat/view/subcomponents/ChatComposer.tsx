@@ -14,6 +14,7 @@ import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon } from 'l
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
+import { useClaudeUsage } from '../../hooks/useClaudeUsage';
 import type { QueuedDraft } from '../../hooks/useChatComposerState';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
@@ -35,6 +36,8 @@ import ComposerAttachment from './ComposerAttachment';
 import VoiceInputButton from './VoiceInputButton';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import TokenUsageSummary from './TokenUsageSummary';
+import ClaudeUsageSummary from './ClaudeUsageSummary';
+import ClaudeUsageModal from './ClaudeUsageModal';
 import QueuedMessageCard from './QueuedMessageCard';
 import ComposerModelMenu from './ComposerModelMenu';
 import ComposerPermissionMenu from './ComposerPermissionMenu';
@@ -196,6 +199,12 @@ export default function ChatComposer({
       bottom: textareaRect ? window.innerHeight - textareaRect.top + 8 : 90,
     };
   }, [isCommandMenuOpen, textareaRef]);
+
+  // Plan allowance for the account signed in on the server host. It sits beside
+  // the per-session token count so both "how much did this cost" and "how much
+  // is left" read from one place. Null whenever there is nothing to show.
+  const claudeUsage = useClaudeUsage();
+  const [isClaudeUsageOpen, setIsClaudeUsageOpen] = useState(false);
 
   // Voice state is hosted here (not in the mic button) so the main Send button can stop
   // recording and send the transcript in one tap, the way the mic button drops it in the box.
@@ -395,6 +404,8 @@ export default function ChatComposer({
 
             <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
 
+            <ClaudeUsageSummary usage={claudeUsage} onClick={() => setIsClaudeUsageOpen(true)} />
+
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
               onClick={onToggleCommandMenu}
@@ -487,6 +498,16 @@ export default function ChatComposer({
         </PromptInputFooter>
       </PromptInput>
       </div>}
+
+      {/*
+        Sits outside the conditional above so an open dialog is not torn down
+        if the input area is hidden while the user is reading it.
+      */}
+      <ClaudeUsageModal
+        usage={claudeUsage}
+        open={isClaudeUsageOpen}
+        onClose={() => setIsClaudeUsageOpen(false)}
+      />
     </div>
   );
 }

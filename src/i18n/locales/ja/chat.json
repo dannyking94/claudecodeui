@@ -115,7 +115,29 @@
       "enter": "Enterで送信 • Shift+Enterで改行 • Tabでモード切替 • / でスラッシュコマンド"
     },
     "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
-    "showAllCommands": "すべてのコマンドを表示"
+    "showAllCommands": "すべてのコマンドを表示",
+    "claudeUsage": {
+      "label": "セッション",
+      "ariaLabel": "Claude プランの使用量",
+      "session": "セッション (5時間): {{percent}}% 使用",
+      "weekly": "週間: {{percent}}% 使用",
+      "resetsIn": "{{duration}} 後にリセット",
+      "plan": "{{plan}} プラン",
+      "title": "プラン使用量",
+      "eyebrow": "Claude アカウント",
+      "subtitle": "このホストでサインイン中のアカウントの残り使用枠です。",
+      "percentUsed": "{{percent}}% 使用",
+      "active": "使用中",
+      "resetsSoon": "まもなくリセット",
+      "close": "閉じる",
+      "noBreakdown": "このアカウントでは期間別の内訳を利用できません。",
+      "footnote": "Claude がアカウント全体について報告した値です。このアプリだけでなく、すべてのクライアントが対象です。",
+      "kinds": {
+        "session": "セッション (5時間)",
+        "weekly_all": "週間 (全モデル)",
+        "weekly_scoped": "週間"
+      }
+    }
   },
   "providerSelection": {
     "title": "AIアシスタントを選択",

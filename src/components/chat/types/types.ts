@@ -9,6 +9,48 @@ export type Provider = LLMProvider;
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'plan';
 
+/** One Claude plan rate-limit window, as reported by `/api/system/claude-usage`. */
+export type ClaudeUsageWindow = {
+  /** Percent of the window's allowance consumed. Can exceed 100 when overdrawn. */
+  utilization: number;
+  /** Epoch ms when the window rolls over, or null when upstream omits it. */
+  resetsAt: number | null;
+  severity: 'normal' | 'warning' | 'critical';
+};
+
+/**
+ * One entry from the full per-window breakdown behind the two headline
+ * figures. `kind` is passed through from upstream rather than narrowed to a
+ * union: accounts expose different windows and new ones appear over time, so
+ * an unrecognized kind is displayed with its raw name instead of dropped.
+ */
+export type ClaudeUsageLimit = {
+  kind: string;
+  utilization: number;
+  resetsAt: number | null;
+  severity: ClaudeUsageWindow['severity'];
+  /** Model or surface the window applies to, e.g. `Fable`. Null when account-wide. */
+  scopeLabel: string | null;
+  /** True for the window currently governing throughput. */
+  isActive: boolean;
+};
+
+/**
+ * Remaining plan allowance for the Claude account signed in on the server host.
+ *
+ * `null` means "nothing to display" — the server withheld it (platform mode),
+ * no account is signed in, or the endpoint could not be read. All three are
+ * ordinary states, so the composer simply omits the pill.
+ */
+export type ClaudeUsage = {
+  fiveHour: ClaudeUsageWindow | null;
+  sevenDay: ClaudeUsageWindow | null;
+  /** Every window upstream reports, shown in the detail dialog. */
+  limits: ClaudeUsageLimit[];
+  /** Plan label such as `max`, shown in the tooltip and dialog header. */
+  plan: string | null;
+};
+
 export interface ChatAttachment {
   /** Absolute path inside the server-managed chat attachment store. */
   path?: string;

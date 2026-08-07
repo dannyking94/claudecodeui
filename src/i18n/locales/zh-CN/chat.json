@@ -136,6 +136,28 @@
       "willSend": "将在当前完成后发送",
       "edit": "编辑排队消息",
       "delete": "删除排队消息"
+    },
+    "claudeUsage": {
+      "label": "会话",
+      "ariaLabel": "Claude 套餐用量",
+      "session": "会话（5 小时）：已用 {{percent}}%",
+      "weekly": "每周：已用 {{percent}}%",
+      "resetsIn": "{{duration}} 后重置",
+      "plan": "{{plan}} 套餐",
+      "title": "套餐用量",
+      "eyebrow": "Claude 账户",
+      "subtitle": "此主机上已登录账户的剩余额度。",
+      "percentUsed": "已用 {{percent}}%",
+      "active": "生效中",
+      "resetsSoon": "即将重置",
+      "close": "关闭",
+      "noBreakdown": "此账户没有可用的分时段明细。",
+      "footnote": "由 Claude 按整个账户统计，涵盖所有客户端，而不仅是本应用。",
+      "kinds": {
+        "session": "会话（5 小时）",
+        "weekly_all": "每周（全部模型）",
+        "weekly_scoped": "每周"
+      }
     }
   },
   "providerSelection": {

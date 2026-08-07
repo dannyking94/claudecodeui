@@ -136,6 +136,28 @@
       "willSend": "Will send when this finishes",
       "edit": "Edit queued message",
       "delete": "Delete queued message"
+    },
+    "claudeUsage": {
+      "label": "session",
+      "ariaLabel": "Claude plan usage",
+      "session": "Session (5h): {{percent}}% used",
+      "weekly": "Weekly: {{percent}}% used",
+      "resetsIn": "resets in {{duration}}",
+      "plan": "{{plan}} plan",
+      "title": "Plan usage",
+      "eyebrow": "Claude account",
+      "subtitle": "Allowance remaining on the account signed in on this host.",
+      "percentUsed": "{{percent}}% used",
+      "active": "active",
+      "resetsSoon": "Resetting now",
+      "close": "Close",
+      "noBreakdown": "No per-window breakdown is available for this account.",
+      "footnote": "Reported by Claude for the whole account, across every client — not just this app.",
+      "kinds": {
+        "session": "Session (5h)",
+        "weekly_all": "Weekly (all models)",
+        "weekly_scoped": "Weekly"
+      }
     }
   },
   "composer": {

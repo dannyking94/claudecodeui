@@ -117,7 +117,29 @@
     "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Tab in der Eingabe drücken)",
     "showAllCommands": "Alle Befehle anzeigen",
     "clearInput": "Eingabe leeren",
-    "scrollToBottom": "Nach unten scrollen"
+    "scrollToBottom": "Nach unten scrollen",
+    "claudeUsage": {
+      "label": "Sitzung",
+      "ariaLabel": "Claude-Kontingentnutzung",
+      "session": "Sitzung (5 Std.): {{percent}} % genutzt",
+      "weekly": "Woche: {{percent}} % genutzt",
+      "resetsIn": "Zurücksetzung in {{duration}}",
+      "plan": "{{plan}}-Tarif",
+      "title": "Tarifnutzung",
+      "eyebrow": "Claude-Konto",
+      "subtitle": "Verbleibendes Kontingent des auf diesem Host angemeldeten Kontos.",
+      "percentUsed": "{{percent}} % genutzt",
+      "active": "aktiv",
+      "resetsSoon": "Wird gerade zurückgesetzt",
+      "close": "Schließen",
+      "noBreakdown": "Für dieses Konto ist keine Aufschlüsselung nach Zeitfenster verfügbar.",
+      "footnote": "Von Claude für das gesamte Konto gemeldet, über alle Clients hinweg – nicht nur für diese App.",
+      "kinds": {
+        "session": "Sitzung (5 Std.)",
+        "weekly_all": "Woche (alle Modelle)",
+        "weekly_scoped": "Woche"
+      }
+    }
   },
   "providerSelection": {
     "title": "KI-Assistent wählen",

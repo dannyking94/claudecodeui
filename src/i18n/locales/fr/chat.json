@@ -118,7 +118,29 @@
     "clickToChangeMode": "Cliquez pour changer le mode de permission (ou appuyez sur Tab dans la saisie)",
     "showAllCommands": "Afficher toutes les commandes",
     "clearInput": "Effacer la saisie",
-    "scrollToBottom": "Défiler vers le bas"
+    "scrollToBottom": "Défiler vers le bas",
+    "claudeUsage": {
+      "label": "session",
+      "ariaLabel": "Utilisation du forfait Claude",
+      "session": "Session (5 h) : {{percent}} % utilisés",
+      "weekly": "Semaine : {{percent}} % utilisés",
+      "resetsIn": "réinitialisation dans {{duration}}",
+      "plan": "Forfait {{plan}}",
+      "title": "Utilisation du forfait",
+      "eyebrow": "Compte Claude",
+      "subtitle": "Quota restant sur le compte connecté sur cet hôte.",
+      "percentUsed": "{{percent}} % utilisés",
+      "active": "actif",
+      "resetsSoon": "Réinitialisation en cours",
+      "close": "Fermer",
+      "noBreakdown": "Aucun détail par fenêtre n'est disponible pour ce compte.",
+      "footnote": "Communiqué par Claude pour l'ensemble du compte, tous clients confondus — pas seulement cette application.",
+      "kinds": {
+        "session": "Session (5 h)",
+        "weekly_all": "Semaine (tous les modèles)",
+        "weekly_scoped": "Semaine"
+      }
+    }
   },
   "providerSelection": {
     "title": "Choisissez votre assistant IA",

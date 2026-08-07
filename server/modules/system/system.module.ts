@@ -3,6 +3,7 @@ import os from 'node:os';
 import spawn from 'cross-spawn';
 import type { Router } from 'express';
 
+import { createClaudeUsageService } from './claude-usage.service.js';
 import { createSystemRouter } from './system.routes.js';
 import { createSystemUpdateService } from './system.service.js';
 
@@ -58,5 +59,13 @@ export function createSystemModule(options: SystemModuleOptions): Router {
     logError: (message, detail) => console.error(message, detail ?? ''),
   });
 
-  return createSystemRouter(systemUpdateService, { isPlatform: options.isPlatform });
+  const claudeUsageService = createClaudeUsageService({
+    homeDirectory: os.homedir(),
+    isPlatform: options.isPlatform,
+    logError: (message, detail) => console.error(message, detail ?? ''),
+  });
+
+  return createSystemRouter(systemUpdateService, claudeUsageService, {
+    isPlatform: options.isPlatform,
+  });
 }

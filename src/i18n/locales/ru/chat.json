@@ -117,7 +117,29 @@
     "clickToChangeMode": "Нажмите для смены режима разрешений (или нажмите Tab в поле ввода)",
     "showAllCommands": "Показать все команды",
     "clearInput": "Очистить ввод",
-    "scrollToBottom": "Прокрутить вниз"
+    "scrollToBottom": "Прокрутить вниз",
+    "claudeUsage": {
+      "label": "сессия",
+      "ariaLabel": "Использование плана Claude",
+      "session": "Сессия (5 ч): использовано {{percent}}%",
+      "weekly": "Неделя: использовано {{percent}}%",
+      "resetsIn": "сброс через {{duration}}",
+      "plan": "Тариф {{plan}}",
+      "title": "Использование плана",
+      "eyebrow": "Аккаунт Claude",
+      "subtitle": "Остаток квоты аккаунта, выполнившего вход на этом хосте.",
+      "percentUsed": "использовано {{percent}}%",
+      "active": "активно",
+      "resetsSoon": "Сброс выполняется",
+      "close": "Закрыть",
+      "noBreakdown": "Для этого аккаунта нет разбивки по окнам.",
+      "footnote": "Данные Claude по всему аккаунту и всем клиентам, а не только по этому приложению.",
+      "kinds": {
+        "session": "Сессия (5 ч)",
+        "weekly_all": "Неделя (все модели)",
+        "weekly_scoped": "Неделя"
+      }
+    }
   },
   "providerSelection": {
     "title": "Выберите вашего AI-ассистента",
