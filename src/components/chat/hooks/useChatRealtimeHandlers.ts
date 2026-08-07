@@ -317,7 +317,13 @@ export function useChatRealtimeHandlers({
 
         case 'status': {
           if (msg.text === 'token_budget' && msg.tokenBudget) {
-            setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+            // The composer shows one counter, so it may only reflect the
+            // conversation on screen. Concurrent runs each report their own
+            // usage, and without this guard whichever session last emitted
+            // would overwrite the displayed figure.
+            if (sid === activeViewSessionId) {
+              setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+            }
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,
