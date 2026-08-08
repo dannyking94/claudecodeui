@@ -10,10 +10,24 @@
     <!-- Fonts: Encode Sans (UI) + Merriweather (chat) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      Loaded non-blocking: iOS Safari discards backgrounded tabs, so every return
+      is a cold boot, and a render-blocking third-party stylesheet delays first
+      paint by a full round trip to Google every time. `display=swap` in the URL
+      already renders fallback text first, so nothing is gained by blocking.
+    -->
     <link
       href="https://fonts.googleapis.com/css2?family=Encode+Sans:wght@400;500;600;700&family=Merriweather:ital,wght@0,400;0,700;1,400;1,700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all';this.onload=null"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Encode+Sans:wght@400;500;600;700&family=Merriweather:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json" crossorigin="use-credentials"  />
