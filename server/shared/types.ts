@@ -321,6 +321,25 @@ export type ProviderRunFunction = (
 ) => Promise<unknown>;
 
 /**
+ * Opens a chat run for a turn the user did not ask for.
+ *
+ * Runtimes that hold a session open between turns (so `/loop`'s cron jobs and
+ * `/goal`'s wake-ups survive) receive those turns on the same stream as normal
+ * replies, with no `chat.send` behind them. This is how such a turn gets a
+ * writer and a place in the chat layer's run registry. Returns `null` when the
+ * session already has a run in flight, or when no chat layer is installed.
+ */
+export type SpontaneousRunOpener = (input: {
+  sessionId: string;
+  provider: LLMProvider;
+  providerSessionId: string | null;
+  userId: string | number | null;
+}) => {
+  writer: ProviderRuntimeWriter;
+  complete(opts: { exitCode: number }): void;
+} | null;
+
+/**
  * Shared options used to fetch historical provider messages.
  *
  * Consumers should pass provider-specific lookup hints (`projectPath`) only

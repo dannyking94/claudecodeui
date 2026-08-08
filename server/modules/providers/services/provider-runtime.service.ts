@@ -9,6 +9,7 @@ import type {
   ProviderRunFunction,
   ProviderRuntimeContext,
   ProviderRuntimeWriter,
+  SpontaneousRunOpener,
 } from '@/shared/types.js';
 
 type ProviderRuntimeServiceDependencies = {
@@ -90,6 +91,30 @@ export function createProviderRuntimeService(
 
     async abort(providerName: LLMProvider, sessionId: string): Promise<boolean> {
       return Boolean(await dependencies.resolveProvider(providerName).runtime.abort(sessionId));
+    },
+
+    /**
+     * Installs the chat layer's hook for turns no client asked for, on every
+     * runtime that keeps sessions alive between turns.
+     */
+    setSpontaneousRunOpener(opener: SpontaneousRunOpener | null): void {
+      for (const provider of dependencies.listProviders()) {
+        provider.runtime.setSpontaneousRunOpener?.(opener);
+      }
+    },
+
+    /** Releases any process held open for a session that is going away. */
+    endSession(sessionId: string): void {
+      for (const provider of dependencies.listProviders()) {
+        provider.runtime.endSession?.(sessionId);
+      }
+    },
+
+    /** Releases every held process; called on server shutdown. */
+    shutdown(): void {
+      for (const provider of dependencies.listProviders()) {
+        provider.runtime.shutdown?.();
+      }
     },
 
     resolveToolApproval(requestId: string, decision: ProviderPermissionDecision): void {

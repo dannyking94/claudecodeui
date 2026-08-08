@@ -11,7 +11,11 @@ import {
   unsubscribeFromSystemStats,
 } from '@/modules/system/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
-import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import {
+  connectedClients,
+  WS_CLOSED_STATE,
+  WS_OPEN_STATE,
+} from '@/modules/websocket/services/websocket-state.service.js';
 import {
   getGlobalImageAssetsDir,
   isImageAttachmentDescriptor,
@@ -24,6 +28,7 @@ import type {
   LLMProvider,
   ProviderPermissionDecision,
   ProviderRuntimeWriter,
+  RealtimeClientConnection,
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 
@@ -67,6 +72,70 @@ export function filterImagesToUploadStore(
   assetsRootOverride?: string,
 ): ChatAttachmentDescriptor[] {
   return filterAttachmentsToUploadStore(images, assetsRootOverride);
+}
+
+/**
+ * Stand-in connection for a run nobody is watching yet.
+ *
+ * Scheduled work (a `/loop` cron job, a `/goal` wake-up) starts a turn with no
+ * `chat.send` and therefore no requesting socket. The run still needs a writer,
+ * so it gets one pointed at a permanently closed connection: every event is
+ * sequenced and buffered as usual, and `run_started` tells clients to subscribe,
+ * which swaps in their real socket and replays what they missed.
+ */
+const DETACHED_CONNECTION: RealtimeClientConnection = {
+  readyState: WS_CLOSED_STATE,
+  send() {},
+};
+
+/**
+ * Opens a chat run for a turn the user did not send.
+ *
+ * Installed on the provider runtimes at startup. Returns `null` when the
+ * session already has a run in flight — the runtime then drops the output
+ * rather than interleaving two turns onto one run.
+ */
+export function openSpontaneousChatRun(input: {
+  sessionId: string;
+  provider: LLMProvider;
+  providerSessionId: string | null;
+  userId: string | number | null;
+}): { writer: ProviderRuntimeWriter; complete(opts: { exitCode: number }): void } | null {
+  const run = chatRunRegistry.startRun({
+    appSessionId: input.sessionId,
+    provider: input.provider,
+    providerSessionId: input.providerSessionId,
+    connection: DETACHED_CONNECTION,
+    userId: input.userId,
+  });
+
+  if (!run) {
+    console.warn(
+      `[Chat] Scheduled work fired for session "${input.sessionId}" while a run was already active.`,
+    );
+    return null;
+  }
+
+  // Clients cannot know a run they did not start exists. This nudges every
+  // connected client to subscribe, which attaches its socket and replays the
+  // events buffered since the turn began.
+  const announcement = JSON.stringify({
+    kind: 'run_started',
+    sessionId: input.sessionId,
+    provider: input.provider,
+    origin: 'scheduled',
+    timestamp: new Date().toISOString(),
+  });
+  connectedClients.forEach((client) => {
+    if (client.readyState === WS_OPEN_STATE) {
+      client.send(announcement);
+    }
+  });
+
+  return {
+    writer: run.writer,
+    complete: (opts) => chatRunRegistry.completeRunIfCurrent(run, opts),
+  };
 }
 
 /** Application boundary for dispatching provider runs and approvals. */

@@ -15,7 +15,7 @@ import {
     initializeSessionsWatcher,
     providerRuntimeService,
 } from '@/modules/providers/index.js';
-import { createWebSocketServer } from '@/modules/websocket/index.js';
+import { createWebSocketServer, openSpontaneousChatRun } from '@/modules/websocket/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -116,6 +116,11 @@ const wss = createWebSocketServer(server, {
     },
     getPluginPort,
 });
+
+// Runtimes that hold a session open between turns deliver scheduled work
+// (`/loop` cron jobs, `/goal` wake-ups) as turns nobody sent. This is how those
+// turns reach the chat layer and, from there, the UI.
+providerRuntimeService.setSpontaneousRunOpener(openSpontaneousChatRun);
 
 // Make WebSocket server available to routes
 app.locals.wss = wss;
@@ -374,6 +379,12 @@ async function startServer() {
         await closeSessionsWatcher();
         // Clean up plugin processes on shutdown
         const shutdownRuntimeServices = async () => {
+            try {
+                // Persistent provider sessions each hold a live CLI subprocess.
+                providerRuntimeService.shutdown();
+            } catch (err) {
+                console.error('[Providers] Error closing sessions during shutdown:', getErrorMessage(err));
+            }
             try {
                 await browserUseService.stopAllSessions();
             } catch (err) {

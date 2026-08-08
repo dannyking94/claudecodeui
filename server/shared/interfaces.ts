@@ -16,6 +16,7 @@ import type {
   ProviderRuntimeContext,
   ProviderRuntimePermissionGateway,
   ProviderRuntimeWriter,
+  SpontaneousRunOpener,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
 
@@ -34,7 +35,20 @@ export interface IProviderRuntime {
     writer: ProviderRuntimeWriter,
     context: ProviderRuntimeContext,
   ): Promise<unknown>;
+  /**
+   * Stops the turn in flight. Runtimes that keep a session alive between turns
+   * interrupt only the reply — use `endSession` to discard the session itself.
+   */
   abort(sessionId: string): boolean | Promise<boolean>;
+  /** Releases any process a runtime holds open for a session. */
+  endSession?(sessionId: string): void;
+  /** Releases every held process; called on server shutdown. */
+  shutdown?(): void;
+  /**
+   * Installs the hook a runtime uses to surface turns the user did not send —
+   * scheduled work such as `/loop` cron jobs waking a session up.
+   */
+  setSpontaneousRunOpener?(opener: SpontaneousRunOpener | null): void;
   permissions?: ProviderRuntimePermissionGateway;
 }
 

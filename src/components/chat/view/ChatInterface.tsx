@@ -238,6 +238,20 @@ function ChatInterface({
     });
   }, [selectedProject, selectedSession, sendMessage, sessionStore]);
 
+  // Scheduled work (a `/loop` cron job firing, a `/goal` wake-up) starts a run
+  // this client never requested, so it is not subscribed to the stream.
+  // Subscribing attaches this socket and replays what the turn has produced.
+  const handleUnrequestedRunStarted = useCallback((sessionId: string) => {
+    statusCheckSentAtRef.current.set(sessionId, Date.now());
+    sendMessage({
+      type: 'chat.subscribe',
+      sessions: [{
+        sessionId,
+        lastSeq: lastSeqRef.current.get(sessionId) ?? 0,
+      }],
+    });
+  }, [sendMessage]);
+
   useChatRealtimeHandlers({
     subscribe,
     provider,
@@ -253,6 +267,7 @@ function ChatInterface({
     onSessionProcessing,
     onSessionIdle,
     onWebSocketReconnect: handleWebSocketReconnect,
+    onUnrequestedRunStarted: handleUnrequestedRunStarted,
     sessionStore,
   });
 

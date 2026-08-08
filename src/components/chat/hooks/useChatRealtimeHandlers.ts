@@ -39,6 +39,12 @@ interface UseChatRealtimeHandlersArgs {
   onSessionProcessing?: MarkSessionProcessing;
   onSessionIdle?: MarkSessionIdle;
   onWebSocketReconnect?: () => void;
+  /**
+   * A run started for a session without this client asking for it — scheduled
+   * work (a `/loop` cron job, a `/goal` wake-up) waking the session up. The
+   * client has to subscribe before it will receive the stream.
+   */
+  onUnrequestedRunStarted?: (sessionId: string) => void;
   sessionStore: SessionStore;
 }
 
@@ -70,6 +76,7 @@ export function useChatRealtimeHandlers({
   onSessionProcessing,
   onSessionIdle,
   onWebSocketReconnect,
+  onUnrequestedRunStarted,
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
@@ -137,6 +144,17 @@ export function useChatRealtimeHandlers({
             if (hasPendingActionablePermissionRequests && !hadActionablePermissionRequests) {
               void playNotificationSound();
             }
+          }
+          return;
+        }
+
+        case 'run_started': {
+          // Announced to every client because no one asked for this run, so no
+          // socket is attached to it yet. Subscribing attaches this one and
+          // replays the events buffered since the turn began.
+          if (typeof msg.sessionId === 'string' && msg.sessionId) {
+            onSessionProcessing?.(msg.sessionId);
+            onUnrequestedRunStarted?.(msg.sessionId);
           }
           return;
         }
@@ -356,6 +374,7 @@ export function useChatRealtimeHandlers({
     onSessionProcessing,
     onSessionIdle,
     onWebSocketReconnect,
+    onUnrequestedRunStarted,
     sessionStore,
   ]);
 }

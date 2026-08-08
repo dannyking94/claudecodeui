@@ -4,6 +4,7 @@ import { providerAuthService } from '@/modules/providers/services/provider-auth.
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
+import { providerRuntimeService } from '@/modules/providers/services/provider-runtime.service.js';
 import { providerTokenUsageService } from '@/modules/providers/services/provider-token-usage.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
@@ -612,6 +613,10 @@ router.delete(
       force,
       deletedFromDisk,
     });
+    // Runtimes that keep a session alive between turns hold a subprocess for it.
+    // Leaving one running would keep firing scheduled work into a session the
+    // user just archived or deleted.
+    providerRuntimeService.endSession(sessionId);
     res.json(createApiSuccessResponse(result));
   }),
 );

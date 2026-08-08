@@ -91,6 +91,43 @@ import the service from `server/modules/providers/index.ts`.
 - `sessions` handles runtime event normalization and history fetches.
 - `sessionSynchronizer` handles file-backed session indexing into `sessionsDb`.
 
+### Persistent Runtime Sessions
+
+A runtime may keep its provider process alive between turns instead of starting
+one per message. Claude does, because the scheduling primitives behind `/loop`
+(`CronCreate`, `ScheduleWakeup`) are session-scoped and in-memory: a job is gone
+when the process exits, and only fires while the agent is idle. See
+`claude-agent-pool.provider.js`.
+
+Persistent runtimes change three contracts:
+
+- `abort(sessionId)` interrupts the current turn only. Use `endSession(sessionId)`
+  to discard the session and whatever it had scheduled.
+- Turns can arrive with no `chat.send` behind them. `setSpontaneousRunOpener`
+  installs the chat-layer hook that gives such a turn a run and a writer; the
+  chat layer announces it to clients with a `run_started` frame.
+- `shutdown()` must release every held process; `server/index.ts` calls it on
+  SIGINT/SIGTERM.
+
+Chat runs are the only pooled path — they have a stable app session id to key on
+and a websocket that can receive scheduled turns later. SSE and agent-route
+callers stay one-shot.
+
+Because a pooled process outlives the turn that created it, it can reach a state
+the pool cannot otherwise detect: alive, stream open, but no longer consuming
+input. The turn then queues forever, `runTurn` never settles, and the chat layer
+holds its run open — which refuses every later `chat.send` for that session, so
+the session looks like a chat that answers nothing. Three timeouts bound that:
+
+| Variable | Default | Guards |
+| --- | --- | --- |
+| `CLOUDCLI_CLAUDE_TURN_START_TIMEOUT_MS` | `120000` | A pushed turn that produces no output at all. Fails the turn and replaces the agent. Only the first frame is timed — once the agent answers, a turn may run as long as it needs. |
+| `CLOUDCLI_CLAUDE_STALLED_TURN_MS` | `1800000` | A turn that started and then went silent, including a scheduled one nobody is waiting on. The sweeper expires the agent, which settles the turn. |
+| `CLOUDCLI_CLAUDE_INTERRUPT_TIMEOUT_MS` | `10000` | An agent that will not acknowledge an interrupt, so Stop can never be a button that does nothing. |
+
+The rule these encode: a session must always become usable again on its own. Any
+new pooled path needs the same guarantee.
+
 ## How To Add A Provider
 
 1. Add the provider id everywhere it is part of the contract.
