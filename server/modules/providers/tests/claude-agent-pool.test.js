@@ -134,6 +134,7 @@ function setup({ key = 'session-1', fingerprint = 'fp-1', openSpontaneousRun } =
 test.afterEach(() => {
   claudeAgentPool.closeAll();
   delete process.env.CLOUDCLI_CLAUDE_LOOP_KEEPALIVE_MS;
+  delete process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS;
 });
 
 test('a user turn resolves at the result frame and leaves the session open', async () => {
@@ -297,11 +298,14 @@ test('a loop tick that arms no wakeup gets one fallback tick from the pool', asy
   // the CLI's loop machinery, which is what normally states it.
   assert.match(tick, /ScheduleWakeup/);
   assert.match(tick, /stop: true/);
+  // And it must ask for a word on where things stand, so a tick that ran tools
+  // and re-armed is not indistinguishable from one that did nothing.
+  assert.match(tick, /Say where things stand/);
   // And the session must not be evicted as idle before it lands.
   assert.equal(agent.hasScheduledWork, true);
 });
 
-test('a loop tick that arms its own wakeup is left alone', async () => {
+test('a loop tick that arms its own wakeup is left to the CLI until it is due', async () => {
   process.env.CLOUDCLI_CLAUDE_LOOP_KEEPALIVE_MS = '5';
   const { agent, fake, pushed } = setup(spontaneous());
 
@@ -309,6 +313,127 @@ test('a loop tick that arms its own wakeup is left alone', async () => {
     toolCall('ScheduleWakeup', { delaySeconds: 1200, prompt: '/loop check progress' }),
   ]);
   await settleTimers();
+
+  assert.equal(pushed.length, 1);
+});
+
+/**
+ * The other half of the guard: the tick did its part, and the wakeup it armed
+ * never fired. That job lives in the subprocess's memory and only runs in the
+ * idle window between turns, so under this transport a long delay can pass with
+ * nothing happening at all — leaving a loop that is neither running nor stopped.
+ *
+ * The waits here are minutes long, so these drive time rather than sleep on it.
+ */
+const armWakeup = (seconds = 60) =>
+  toolCall('ScheduleWakeup', { delaySeconds: seconds, prompt: '/loop check progress' });
+
+test('a wakeup that never fires is delivered by the pool once it is overdue', async (t) => {
+  process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS = '30000';
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { agent, fake, pushed } = setup(spontaneous());
+
+  await runLoopTick(agent, fake, [armWakeup(60)]);
+
+  // Due at 60s, and the CLI is given until 90s before the pool steps in.
+  t.mock.timers.tick(85 * 1000);
+  await drain();
+  assert.equal(pushed.length, 1);
+
+  t.mock.timers.tick(10 * 1000);
+  await drain();
+
+  assert.equal(pushed.length, 2);
+  const tick = pushed[1].message.content;
+  assert.match(tick, /check progress/);
+  assert.match(tick, /never fired/);
+  // Delivered outside the CLI's loop machinery, so it states the tick contract.
+  assert.match(tick, /ScheduleWakeup/);
+  assert.match(tick, /Say where things stand/);
+});
+
+test('a wakeup the CLI does fire is not delivered twice', async (t) => {
+  process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS = '30000';
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { agent, fake, pushed } = setup(spontaneous());
+
+  await runLoopTick(agent, fake, [armWakeup(60)]);
+
+  // The CLI fires on time: the tick arrives as a turn nobody sent, and arms the
+  // next wakeup, which moves the pool's deadline out with it.
+  t.mock.timers.tick(61 * 1000);
+  fake.emit(INIT);
+  fake.emit(armWakeup(60));
+  fake.emit(RESULT);
+  await drain();
+
+  // Past the deadline the first wakeup had, but not the second one's.
+  t.mock.timers.tick(60 * 1000);
+  await drain();
+
+  assert.equal(pushed.length, 1);
+});
+
+test('a pool-delivered wakeup keeps the loop going rather than spending its budget', async (t) => {
+  process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS = '30000';
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { agent, fake, pushed } = setup(spontaneous());
+
+  await runLoopTick(agent, fake, [armWakeup(60)]);
+
+  // Three wakeups in a row that the CLI never fires: a loop whose ticks keep
+  // re-arming is still running, so the pool keeps delivering.
+  for (let round = 0; round < 3; round += 1) {
+    t.mock.timers.tick(95 * 1000);
+    await drain();
+    assert.equal(pushed.length, round + 2);
+
+    fake.emit(INIT);
+    fake.emit(armWakeup(60));
+    fake.emit(RESULT);
+    await drain();
+  }
+});
+
+test('a user turn mid-loop does not cancel the pool delivery of a missed wakeup', async (t) => {
+  process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS = '30000';
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { agent, fake, pushed } = setup(spontaneous());
+
+  await runLoopTick(agent, fake, [armWakeup(60)]);
+
+  const aside = agent.runTurn(
+    { type: 'user', message: { role: 'user', content: 'how is it?' } },
+    { id: 'writer' },
+  );
+  fake.emit(INIT);
+  fake.emit(ASSISTANT);
+  fake.emit(RESULT);
+  await aside;
+
+  t.mock.timers.tick(95 * 1000);
+  await drain();
+
+  assert.equal(pushed.length, 3);
+  assert.match(pushed[2].message.content, /never fired/);
+});
+
+test('stopping the loop cancels the pending wakeup delivery', async (t) => {
+  process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS = '30000';
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { agent, fake, pushed } = setup(spontaneous());
+
+  await runLoopTick(agent, fake, [armWakeup(60)]);
+
+  // The CLI fires this one, and the tick ends the loop outright.
+  t.mock.timers.tick(61 * 1000);
+  fake.emit(INIT);
+  fake.emit(toolCall('ScheduleWakeup', { stop: true }));
+  fake.emit(RESULT);
+  await drain();
+
+  t.mock.timers.tick(10 * 60 * 1000);
+  await drain();
 
   assert.equal(pushed.length, 1);
 });

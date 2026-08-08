@@ -17,9 +17,10 @@
  * renders them like any other run.
  *
  * Keeping the process alive is necessary but not sufficient for a dynamic
- * `/loop`, which also needs every tick to arm the next one. The CLI's guard for
- * a tick that forgets is REPL-only, so the pool supplies its own — see
- * `LOOP_KEEPALIVE_BUDGET`.
+ * `/loop`, which also needs every tick to arm the next one and needs the armed
+ * wakeup to actually fire. Neither is guaranteed under this transport, so the
+ * pool delivers the tick itself in both cases — see `LOOP_KEEPALIVE_BUDGET` and
+ * `DEFAULT_WAKEUP_GRACE_MS`.
  *
  * The pool owns transport and lifetime only. Session identity and per-turn
  * settings live in the runtime-owned `state` object it is handed, because the
@@ -132,9 +133,30 @@ const LOOP_KEEPALIVE_BUDGET = 1;
 const DEFAULT_LOOP_KEEPALIVE_MS = 20 * 60 * 1000;
 const LOOP_KEEPALIVE_RETRY_MS = 60 * 1000;
 
-// Read per use rather than at load, so the delay can be retuned without a restart.
+/**
+ * How long past a wakeup's due time to wait for the CLI before delivering the
+ * tick from here instead.
+ *
+ * A tick doing its part is still not enough: an armed wakeup is a session cron
+ * job held in the subprocess's memory, and its scheduler only runs in the idle
+ * window between turns. Observed under this transport, a short delay fires and
+ * a long one routinely does not — the loop then stops dead with a wakeup that
+ * the CLI still considers pending, so nothing reports an error on either side.
+ *
+ * The pool records when each armed wakeup is due, so it can wait out the CLI
+ * and deliver the tick itself once that time has clearly passed. The grace
+ * window absorbs the CLI's own rounding (it rounds a delay up to the next
+ * minute boundary) plus scheduler lag, so a wakeup that does fire is not raced.
+ * A tick delivered this way is the loop working, not a free tick, so it does
+ * not spend the keepalive budget above.
+ */
+const DEFAULT_WAKEUP_GRACE_MS = 90 * 1000;
+
+// Read per use rather than at load, so the delays can be retuned without a restart.
 const loopKeepaliveDelayMs = () =>
   readPositiveInt(process.env.CLOUDCLI_CLAUDE_LOOP_KEEPALIVE_MS, DEFAULT_LOOP_KEEPALIVE_MS);
+const wakeupGraceMs = () =>
+  readPositiveInt(process.env.CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS, DEFAULT_WAKEUP_GRACE_MS);
 
 const clampWakeupDelay = (seconds) => {
   const parsed = Number(seconds);
@@ -165,22 +187,49 @@ function loopInvocation(userMessage) {
 }
 
 /**
- * The fallback tick's prompt.
+ * What every pool-delivered tick must say.
  *
  * A CLI-delivered tick arrives wrapped in the reminder that the loop ends unless
- * this turn re-arms. This one is delivered outside that machinery, so it has to
- * carry the same contract itself.
+ * this turn re-arms. These are delivered outside that machinery, so they have to
+ * carry the same contract themselves.
+ *
+ * The reporting half is the pool's own addition. A tick that inspects, acts and
+ * re-arms without a word renders as a row of tool calls followed by a new
+ * wakeup, which reads as a loop spinning on nothing — the user cannot tell a
+ * tick that found work and did it from one that did nothing at all.
  */
+const TICK_CONTRACT =
+  'Say where things stand in a line or two before this turn ends, even if '
+  + 'nothing changed since the last tick — a tick that only runs tools reads as a '
+  + 'loop doing nothing. To keep the loop running, call ScheduleWakeup at the end '
+  + 'of this turn with `prompt` set to the task above. If there is nothing left to '
+  + 'do, call it with `stop: true` instead.';
+
+/** The free tick's prompt, handed to a loop whose last tick armed nothing. */
 function buildKeepaliveTick(prompt) {
   return [
     '# /loop tick — delivered by cloudcli after the previous tick armed no wakeup',
     '',
     prompt,
     '',
-    'To keep the loop running, call ScheduleWakeup at the end of this turn with '
-    + '`prompt` set to the task above. If there is nothing left to do, call it with '
-    + '`stop: true` instead. This fallback is delivered once — if this turn arms '
+    `${TICK_CONTRACT} This fallback is delivered once — if this turn arms `
     + 'nothing, the loop ends here.',
+  ].join('\n');
+}
+
+/**
+ * The prompt for a tick whose wakeup was armed but never fired.
+ *
+ * Unlike the free tick, this one is the loop running as intended — only the
+ * delivery differs — so it says nothing about the loop being at risk.
+ */
+function buildMissedWakeupTick(prompt) {
+  return [
+    '# /loop tick — delivered by cloudcli because the wakeup this loop armed never fired',
+    '',
+    prompt,
+    '',
+    TICK_CONTRACT,
   ].join('\n');
 }
 
@@ -280,7 +329,10 @@ class PersistentClaudeAgent {
     // The dynamic `/loop` this session is running, if any: the prompt to re-tick
     // with, when its armed wakeup is due, and how many free ticks it has had.
     this.loop = null;
-    this.loopKeepalive = null;
+    // The pool's pending tick delivery for that loop — either the wakeup the CLI
+    // has yet to fire, or the free tick after one that armed nothing. The two are
+    // mutually exclusive, so one timer covers both.
+    this.loopTimer = null;
     this.closed = false;
     this.lastActivityAt = Date.now();
     this.createdAt = Date.now();
@@ -398,13 +450,19 @@ class PersistentClaudeAgent {
     }) ?? null;
 
     this.spontaneousRun = opened;
+    const isLoopTick = this.#isLoopWakeupDue();
+    if (isLoopTick) {
+      // The CLI fired the wakeup after all, so the pool's stand-in delivery for
+      // it is off; this turn's own re-arm decides what comes next.
+      this.#clearLoopTimer();
+    }
     // Begun by a message that already arrived, and no caller is waiting on it,
     // so the start watchdog does not apply — the sweeper covers it stalling.
     this.activeTurn = {
       writer: opened?.writer ?? null,
       spontaneous: true,
       sawOutput: true,
-      isLoopTick: this.#isLoopWakeupDue(),
+      isLoopTick,
       loopPrompt: this.loop?.prompt ?? null,
     };
 
@@ -479,21 +537,22 @@ class PersistentClaudeAgent {
   }
 
   /**
-   * Keeps the dynamic `/loop` alive across a tick that forgot to re-arm.
+   * Keeps the dynamic `/loop` alive across the two ways it silently stops.
    *
-   * A tick that armed its own wakeup, or stopped the loop outright, needs
-   * nothing from the pool. A tick that armed nothing has ended the loop as far
+   * A tick that armed its own wakeup is covered until that wakeup is due, after
+   * which the pool delivers it if the CLI has not. A tick that stopped the loop
+   * outright needs nothing. A tick that armed nothing has ended the loop as far
    * as the CLI is concerned, so the pool delivers one more tick itself and lets
    * that tick decide whether the loop goes on.
    */
   #reviewLoop(turn, error) {
     if (turn.armedWakeup) {
-      this.#clearLoopKeepalive();
       this.loop = {
         prompt: turn.wakeupPrompt ?? turn.loopPrompt ?? this.loop?.prompt ?? null,
         dueAt: Date.now() + clampWakeupDelay(turn.wakeupDelaySeconds) * 1000,
         keepalives: 0,
       };
+      this.#armWakeupDeadline();
       return;
     }
     if (turn.stoppedLoop) {
@@ -527,7 +586,6 @@ class PersistentClaudeAgent {
   }
 
   #armLoopKeepalive() {
-    this.#clearLoopKeepalive();
     const delay = loopKeepaliveDelayMs();
     console.log(
       `[Claude pool] Session ${this.key} ran a loop tick without arming a wakeup; ` +
@@ -535,11 +593,36 @@ class PersistentClaudeAgent {
     );
     // The tick is work the session still owes, so it has to outlive idle eviction.
     this.hasScheduledWork = true;
-    this.loopKeepalive = setTimeout(() => {
-      this.loopKeepalive = null;
-      this.#deliverLoopKeepalive();
+    this.#scheduleTick(delay, () => this.#deliverLoopKeepalive());
+  }
+
+  /**
+   * Stands in for a wakeup the CLI has not fired by the time it is due.
+   *
+   * Armed after every tick that schedules one, and cleared the moment the CLI
+   * delivers that tick itself, so the pool only acts on a wakeup that has gone
+   * missing. A loop with no known prompt is left to the CLI: there is nothing to
+   * re-tick with.
+   */
+  #armWakeupDeadline() {
+    this.#clearLoopTimer();
+    if (!this.loop?.prompt || !Number.isFinite(this.loop.dueAt)) {
+      return;
+    }
+    this.#scheduleTick(
+      Math.max(0, this.loop.dueAt - Date.now()) + wakeupGraceMs(),
+      () => this.#deliverMissedWakeup(),
+    );
+  }
+
+  /** Replaces the pending tick delivery with one that runs `deliver` after `delay`. */
+  #scheduleTick(delay, deliver) {
+    this.#clearLoopTimer();
+    this.loopTimer = setTimeout(() => {
+      this.loopTimer = null;
+      deliver();
     }, delay);
-    this.loopKeepalive.unref?.();
+    this.loopTimer.unref?.();
   }
 
   /**
@@ -554,32 +637,60 @@ class PersistentClaudeAgent {
       return;
     }
     if (this.activeTurn) {
-      this.loopKeepalive = setTimeout(() => {
-        this.loopKeepalive = null;
-        this.#deliverLoopKeepalive();
-      }, LOOP_KEEPALIVE_RETRY_MS);
-      this.loopKeepalive.unref?.();
+      this.#scheduleTick(LOOP_KEEPALIVE_RETRY_MS, () => this.#deliverLoopKeepalive());
       return;
     }
 
+    this.#pushTick(buildKeepaliveTick(this.loop.prompt));
+  }
+
+  /**
+   * Pushes the tick the CLI's wakeup owed this loop.
+   *
+   * A wakeup armed since this delivery was scheduled — by a tick the CLI did
+   * fire, or by a later turn — moves the deadline out instead of firing now, so
+   * a loop never gets two ticks for one wakeup.
+   */
+  #deliverMissedWakeup() {
+    if (this.closed || !this.loop?.prompt) {
+      return;
+    }
+    if (Date.now() < this.loop.dueAt + wakeupGraceMs()) {
+      this.#armWakeupDeadline();
+      return;
+    }
+    if (this.activeTurn) {
+      this.#scheduleTick(LOOP_KEEPALIVE_RETRY_MS, () => this.#deliverMissedWakeup());
+      return;
+    }
+
+    console.log(
+      `[Claude pool] Session ${this.key} armed a wakeup the CLI never fired; ` +
+      'delivering that loop tick from the pool.',
+    );
+    this.#pushTick(buildMissedWakeupTick(this.loop.prompt));
+  }
+
+  /** Sends a pool-authored loop tick into the session's input stream. */
+  #pushTick(content) {
     // The turn this push produces is this loop's tick, not a stray cron fire.
     this.loop.dueAt = 0;
     this.inputStream.push({
       type: 'user',
-      message: { role: 'user', content: buildKeepaliveTick(this.loop.prompt) },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
     });
   }
 
-  #clearLoopKeepalive() {
-    if (this.loopKeepalive) {
-      clearTimeout(this.loopKeepalive);
-      this.loopKeepalive = null;
+  #clearLoopTimer() {
+    if (this.loopTimer) {
+      clearTimeout(this.loopTimer);
+      this.loopTimer = null;
     }
   }
 
   #cancelLoop(reason) {
-    this.#clearLoopKeepalive();
+    this.#clearLoopTimer();
     if (this.loop) {
       console.log(`[Claude pool] Session ${this.key} loop ended — ${reason}.`);
       this.loop = null;
@@ -699,7 +810,7 @@ class PersistentClaudeAgent {
     }
     this.closed = true;
     this.#clearStartWatchdog();
-    this.#clearLoopKeepalive();
+    this.#clearLoopTimer();
     this.#endTurn(null, new Error('Claude session closed'));
     try {
       this.inputStream.end();
@@ -713,7 +824,7 @@ class PersistentClaudeAgent {
   #markClosed() {
     if (!this.closed) {
       this.closed = true;
-      this.#clearLoopKeepalive();
+      this.#clearLoopTimer();
       this.#endTurn(null, new Error('Claude session ended'));
     }
     this.onClosed?.(this);

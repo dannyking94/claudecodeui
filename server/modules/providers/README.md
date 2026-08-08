@@ -128,6 +128,25 @@ the session looks like a chat that answers nothing. Three timeouts bound that:
 The rule these encode: a session must always become usable again on its own. Any
 new pooled path needs the same guarantee.
 
+#### Keeping a dynamic `/loop` ticking
+
+Holding the process open is necessary but not sufficient for a self-paced
+`/loop`, which survives only if each tick arms the next one *and* that armed
+wakeup fires. Both fail silently under the SDK transport, so the pool tracks the
+loop itself and delivers the tick when the CLI does not:
+
+| Variable | Default | Guards |
+| --- | --- | --- |
+| `CLOUDCLI_CLAUDE_LOOP_KEEPALIVE_MS` | `1200000` | A tick that armed nothing, which ends the loop as far as the CLI is concerned. The CLI's own guard for this is REPL-only. Budget: one free tick — a loop that declines to re-arm even then is over. |
+| `CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS` | `90000` | A wakeup that was armed and never fired: the job is held in the subprocess's memory and only runs in the idle window between turns, and long delays routinely pass with nothing happening. Counted from when the wakeup was due; absorbs the CLI's rounding to the next minute so a wakeup that does fire is not raced. |
+
+A tick delivered for a missed wakeup is the loop working, so it does not spend
+the keepalive budget. Both are cancelled when the model stops the loop, when a
+turn is interrupted (the CLI drops pending wakeups on abort), and when the agent
+closes. Both also ask the tick to report where things stand: a turn that only
+inspects, acts and re-arms renders as tool calls followed by a new wakeup, which
+is indistinguishable in the UI from a loop spinning on nothing.
+
 ## How To Add A Provider
 
 1. Add the provider id everywhere it is part of the contract.
