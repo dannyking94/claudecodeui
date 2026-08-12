@@ -16,14 +16,66 @@ import {
   readOptionalString,
 } from '@/shared/utils.js';
 
+const CODEX_GPT_56_EFFORT_VALUES = [
+  { value: 'none' },
+  { value: 'low' },
+  { value: 'medium' },
+  { value: 'high' },
+  { value: 'xhigh' },
+  { value: 'max' },
+];
+
+const CODEX_LEGACY_EFFORT_VALUES = [
+  { value: 'low' },
+  { value: 'medium' },
+  { value: 'high' },
+  { value: 'xhigh' },
+];
+
 export const CODEX_FALLBACK_MODELS: ProviderModelsDefinition = {
   OPTIONS: [
+    {
+      value: 'gpt-5.6',
+      label: 'gpt-5.6',
+      description: 'Alias for gpt-5.6-sol.',
+      effort: {
+        default: 'medium',
+        values: CODEX_GPT_56_EFFORT_VALUES,
+      },
+    },
+    {
+      value: 'gpt-5.6-sol',
+      label: 'gpt-5.6-sol',
+      description: 'GPT-5.6 frontier model for complex professional work.',
+      effort: {
+        default: 'medium',
+        values: CODEX_GPT_56_EFFORT_VALUES,
+      },
+    },
+    {
+      value: 'gpt-5.6-terra',
+      label: 'gpt-5.6-terra',
+      description: 'GPT-5.6 model balancing intelligence and cost.',
+      effort: {
+        default: 'medium',
+        values: CODEX_GPT_56_EFFORT_VALUES,
+      },
+    },
+    {
+      value: 'gpt-5.6-luna',
+      label: 'gpt-5.6-luna',
+      description: 'GPT-5.6 model for cost-sensitive workloads.',
+      effort: {
+        default: 'medium',
+        values: CODEX_GPT_56_EFFORT_VALUES,
+      },
+    },
     {
       value: 'gpt-5.5',
       label: 'gpt-5.5',
       effort: {
         default: 'medium',
-        values: [{ value: 'low' }, { value: 'medium' }, { value: 'high' }, { value: 'xhigh' }],
+        values: CODEX_LEGACY_EFFORT_VALUES,
       },
     },
     {
@@ -31,7 +83,7 @@ export const CODEX_FALLBACK_MODELS: ProviderModelsDefinition = {
       label: 'gpt-5.4',
       effort: {
         default: 'medium',
-        values: [{ value: 'low' }, { value: 'medium' }, { value: 'high' }, { value: 'xhigh' }],
+        values: CODEX_LEGACY_EFFORT_VALUES,
       },
     },
     {
@@ -39,11 +91,11 @@ export const CODEX_FALLBACK_MODELS: ProviderModelsDefinition = {
       label: 'gpt-5.4-mini',
       effort: {
         default: 'medium',
-        values: [{ value: 'low' }, { value: 'medium' }, { value: 'high' }, { value: 'xhigh' }],
+        values: CODEX_LEGACY_EFFORT_VALUES,
       },
     },
   ],
-  DEFAULT: 'gpt-5.4',
+  DEFAULT: 'gpt-5.6',
 };
 
 type CodexCachedModel = {
@@ -102,7 +154,11 @@ const mapCodexModel = (model: CodexCachedModel): ProviderModelOption => {
   };
 };
 
-const buildCodexModelsDefinition = (models: CodexCachedModel[]): ProviderModelsDefinition => {
+/**
+ * Provider tests use this builder to verify Codex cache parsing and fallback
+ * merging without reading a real `~/.codex/models_cache.json` file.
+ */
+export const buildCodexModelsDefinition = (models: CodexCachedModel[]): ProviderModelsDefinition => {
   const sortedModels = [...models]
     .filter((model) => model.visibility === 'list' && model.supported_in_api !== false)
     .sort((left, right) => readCodexPriority(left.priority) - readCodexPriority(right.priority));
@@ -120,13 +176,26 @@ const buildCodexModelsDefinition = (models: CodexCachedModel[]): ProviderModelsD
     options.push(mappedModel);
   }
 
+  for (const fallbackModel of CODEX_FALLBACK_MODELS.OPTIONS) {
+    if (seenValues.has(fallbackModel.value)) {
+      continue;
+    }
+
+    seenValues.add(fallbackModel.value);
+    options.push(fallbackModel);
+  }
+
   if (options.length === 0) {
     return CODEX_FALLBACK_MODELS;
   }
 
+  const defaultValue = options.find((option) => option.value === CODEX_FALLBACK_MODELS.DEFAULT)?.value
+    ?? options[0]?.value
+    ?? CODEX_FALLBACK_MODELS.DEFAULT;
+
   return {
     OPTIONS: options,
-    DEFAULT: options[0]?.value ?? CODEX_FALLBACK_MODELS.DEFAULT,
+    DEFAULT: defaultValue,
   };
 };
 

@@ -21,40 +21,23 @@ import {
   normalizeImageDescriptors
 } from '@/shared/image-attachments.js';
 import { notifyRunFailed, notifyRunStopped } from '@/modules/notifications/index.js';
-import { createCompleteMessage, createNormalizedMessage } from '@/shared/utils.js';
+import {
+  abortCodexAppServerSession,
+  codexAppServerPermissions,
+  isCodexAppServerEnabled,
+  queryCodexViaAppServer,
+} from '@/modules/providers/list/codex/codex-app-server.provider.js';
+import { createCompleteMessage, createNormalizedMessage, extractCodexTokenBudget } from '@/shared/utils.js';
 
 const activeCodexSessions = new Map();
 
-function readUsageNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function extractCodexTokenBudget(event) {
-  const info = event?.info || event?.payload?.info || event?.usage?.info;
-  const usage = info?.total_token_usage || event?.usage?.total_token_usage || event?.usage;
-  if (!usage || typeof usage !== 'object') {
-    return null;
-  }
-
-  const inputTokens = readUsageNumber(usage.input_tokens);
-  const outputTokens = readUsageNumber(usage.output_tokens);
-  const used = readUsageNumber(usage.total_tokens) || inputTokens + outputTokens;
-
-  return {
-    used,
-    total: readUsageNumber(info?.model_context_window || event?.usage?.model_context_window) || 200000,
-    inputTokens,
-    outputTokens,
-    breakdown: {
-      input: inputTokens,
-      output: outputTokens,
-    },
-  };
-}
-
 /**
  * Transform Codex SDK event to WebSocket message format
+ *
+ * Passed into the app-server transport as its event transformer, which reshapes
+ * app-server notifications into these same event types so both transports
+ * render identically in the UI.
+ *
  * @param {object} event - SDK event
  * @returns {object} - Transformed event for WebSocket
  */
@@ -224,6 +207,13 @@ function mapPermissionModeToCodexOptions(permissionMode) {
  * @param {WebSocket|object} ws - WebSocket connection or response writer
  */
 export async function queryCodex(command, options = {}, ws, context) {
+  // The app-server transport is the only one that can surface an approval to
+  // the UI; `codex exec` resolves approvals inside the CLI from the policy it
+  // was spawned with. Opt in with CODEX_APP_SERVER=true.
+  if (isCodexAppServerEnabled()) {
+    return queryCodexViaAppServer(command, options, ws, context, transformCodexEvent);
+  }
+
   const {
     sessionId,
     sessionSummary,
@@ -443,6 +433,11 @@ export async function queryCodex(command, options = {}, ws, context) {
  * @returns {boolean} - Whether abort was successful
  */
 export function abortCodexSession(sessionId) {
+  // App-server turns are tracked by their own transport, not activeCodexSessions.
+  if (isCodexAppServerEnabled() && abortCodexAppServerSession(sessionId)) {
+    return true;
+  }
+
   const session = activeCodexSessions.get(sessionId);
 
   if (!session) {
@@ -492,6 +487,11 @@ export function getActiveCodexSessions() {
 export const codexRuntime = {
   run: queryCodex,
   abort: abortCodexSession,
+  // provider-runtime.service broadcasts permission decisions to every runtime's
+  // gateway, so this is all Codex approvals need to resolve over the existing
+  // `chat.permission-response` round trip. Inert unless CODEX_APP_SERVER=true,
+  // because only that transport can raise a request in the first place.
+  permissions: codexAppServerPermissions,
 };
 
 /**

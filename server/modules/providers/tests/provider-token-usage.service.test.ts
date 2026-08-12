@@ -89,6 +89,11 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
             total_token_usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 },
             model_context_window: 250_000,
           },
+          rate_limits: {
+            primary: { used_percent: 17, window_minutes: 10_080, resets_at: 1_800_000_000 },
+            secondary: null,
+            plan_type: 'plus',
+          },
         },
       }),
     ].join('\n'));
@@ -106,6 +111,23 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
       inputTokens: 40,
       outputTokens: 9,
       breakdown: { input: 40, output: 9 },
+      accountUsage: {
+        fiveHour: null,
+        sevenDay: {
+          utilization: 17,
+          resetsAt: 1_800_000_000_000,
+          severity: 'normal',
+        },
+        limits: [{
+          kind: 'weekly_all',
+          utilization: 17,
+          resetsAt: 1_800_000_000_000,
+          severity: 'normal',
+          scopeLabel: null,
+          isActive: false,
+        }],
+        plan: 'plus',
+      },
     });
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });

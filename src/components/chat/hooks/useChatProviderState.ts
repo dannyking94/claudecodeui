@@ -19,7 +19,7 @@ import {
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
   claude: 'default',
   cursor: 'gpt-5.3-codex',
-  codex: 'gpt-5.4',
+  codex: 'gpt-5.6',
   opencode: 'anthropic/claude-sonnet-4-5',
 };
 

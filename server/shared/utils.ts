@@ -424,6 +424,181 @@ export function sliceTailPage<T>(
 }
 
 // ---------------------------
+//----------------- CODEX TOKEN AND ACCOUNT USAGE UTILITIES ------------
+type CodexUsageSeverity = 'normal' | 'warning' | 'critical';
+
+type CodexUsageWindow = {
+  utilization: number;
+  resetsAt: number | null;
+  severity: CodexUsageSeverity;
+};
+
+type CodexUsageLimit = CodexUsageWindow & {
+  kind: string;
+  scopeLabel: string | null;
+  isActive: boolean;
+};
+
+type CodexAccountUsage = {
+  fiveHour: CodexUsageWindow | null;
+  sevenDay: CodexUsageWindow | null;
+  limits: CodexUsageLimit[];
+  plan: string | null;
+};
+
+type CodexTokenBudget = {
+  used: number;
+  total: number;
+  inputTokens: number;
+  outputTokens: number;
+  breakdown: {
+    input: number;
+    output: number;
+  };
+  accountUsage?: CodexAccountUsage;
+};
+
+const CODEX_FIVE_HOURS_MINUTES = 300;
+const CODEX_SEVEN_DAYS_MINUTES = 10_080;
+
+function readCodexUsageNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readCodexUsageSeverity(utilization: number): CodexUsageSeverity {
+  if (utilization >= 100) {
+    return 'critical';
+  }
+  return utilization >= 80 ? 'warning' : 'normal';
+}
+
+function readCodexResetTime(value: unknown): number | null {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : null;
+}
+
+function readCodexRateLimit(
+  value: unknown,
+  fallbackKind: string,
+): (CodexUsageLimit & { windowMinutes: number }) | null {
+  const record = readObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const utilization = Number(record.used_percent ?? record.usedPercent);
+  if (!Number.isFinite(utilization)) {
+    return null;
+  }
+
+  const windowMinutes = readCodexUsageNumber(record.window_minutes ?? record.windowDurationMins);
+  const kind = windowMinutes === CODEX_FIVE_HOURS_MINUTES
+    ? 'session'
+    : windowMinutes === CODEX_SEVEN_DAYS_MINUTES
+      ? 'weekly_all'
+      : windowMinutes > 0
+        ? `window_${windowMinutes}`
+        : fallbackKind;
+
+  return {
+    kind,
+    windowMinutes,
+    utilization: Math.max(0, utilization),
+    resetsAt: readCodexResetTime(record.resets_at ?? record.resetsAt),
+    severity: readCodexUsageSeverity(utilization),
+    scopeLabel: null,
+    isActive: false,
+  };
+}
+
+function readCodexAccountUsage(value: unknown): CodexAccountUsage | undefined {
+  const rateLimits = readObjectRecord(value);
+  if (!rateLimits) {
+    return undefined;
+  }
+
+  const windows = [
+    readCodexRateLimit(rateLimits.primary, 'primary'),
+    readCodexRateLimit(rateLimits.secondary, 'secondary'),
+  ].filter((window): window is NonNullable<typeof window> => window !== null);
+
+  if (windows.length === 0) {
+    return undefined;
+  }
+
+  const toWindow = ({ utilization, resetsAt, severity }: CodexUsageLimit): CodexUsageWindow => ({
+    utilization,
+    resetsAt,
+    severity,
+  });
+
+  const fiveHour = windows.find((window) => window.windowMinutes === CODEX_FIVE_HOURS_MINUTES) ?? null;
+  const sevenDay = windows.find((window) => window.windowMinutes === CODEX_SEVEN_DAYS_MINUTES) ?? null;
+  const plan = rateLimits.plan_type ?? rateLimits.planType;
+
+  return {
+    fiveHour: fiveHour ? toWindow(fiveHour) : null,
+    sevenDay: sevenDay ? toWindow(sevenDay) : null,
+    limits: windows.map(({ windowMinutes: _windowMinutes, ...window }) => window),
+    plan: typeof plan === 'string' && plan.trim() ? plan : null,
+  };
+}
+
+/**
+ * Normalizes Codex token and account rate-limit snapshots for the Codex runtime,
+ * app-server transport, session-history reader, and provider token-usage service.
+ * Inputs may use persisted CLI snake_case fields or app-server camelCase fields;
+ * missing token totals are valid when an account-only rate-limit snapshot exists.
+ */
+export function extractCodexTokenBudget(value: unknown): CodexTokenBudget | null {
+  const event = readObjectRecord(value);
+  const payload = readObjectRecord(event?.payload);
+  const eventUsage = readObjectRecord(event?.usage)
+    ?? readObjectRecord(event?.tokenUsage)
+    ?? readObjectRecord(payload?.tokenUsage);
+  const info = readObjectRecord(event?.info)
+    ?? readObjectRecord(payload?.info)
+    ?? readObjectRecord(eventUsage?.info);
+  const usage = readObjectRecord(info?.total_token_usage)
+    ?? readObjectRecord(eventUsage?.total_token_usage)
+    ?? readObjectRecord(eventUsage?.total)
+    ?? eventUsage;
+  const rateLimits = event?.rate_limits
+    ?? event?.rateLimits
+    ?? payload?.rate_limits
+    ?? payload?.rateLimits
+    ?? eventUsage?.rate_limits
+    ?? eventUsage?.rateLimits;
+  const accountUsage = readCodexAccountUsage(rateLimits);
+
+  if (!usage && !accountUsage) {
+    return null;
+  }
+
+  const inputTokens = readCodexUsageNumber(usage?.input_tokens ?? usage?.inputTokens);
+  const outputTokens = readCodexUsageNumber(usage?.output_tokens ?? usage?.outputTokens);
+  const used = readCodexUsageNumber(usage?.total_tokens ?? usage?.totalTokens) || inputTokens + outputTokens;
+
+  return {
+    used,
+    total: readCodexUsageNumber(
+      info?.model_context_window
+        ?? info?.modelContextWindow
+        ?? eventUsage?.model_context_window
+        ?? eventUsage?.modelContextWindow,
+    ) || 200_000,
+    inputTokens,
+    outputTokens,
+    breakdown: {
+      input: inputTokens,
+      output: outputTokens,
+    },
+    ...(accountUsage ? { accountUsage } : {}),
+  };
+}
+
+// ---------------------------
 //----------------- MCP CONFIG PARSING UTILITIES ------------
 /**
  * Safely narrows an unknown value to a plain object record.

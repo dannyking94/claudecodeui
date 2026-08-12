@@ -1,3 +1,4 @@
+import { isCodexAppServerEnabled } from '@/modules/providers/list/codex/codex-app-server.provider.js';
 import type { LLMProvider } from '@/shared/types.js';
 
 /**
@@ -84,14 +85,32 @@ const PROVIDER_CAPABILITIES: Record<LLMProvider, ProviderCapabilities> = {
 };
 
 /**
+ * Resolves one provider's capabilities against runtime configuration.
+ *
+ * Codex only surfaces interactive approvals on the app-server transport, so the
+ * matrix entry (written for the default `codex exec` transport) is corrected
+ * here rather than duplicated. Reading the flag per call keeps a server started
+ * with a different env from serving a stale answer.
+ */
+function resolveCapabilities(provider: LLMProvider): ProviderCapabilities {
+  const capabilities = PROVIDER_CAPABILITIES[provider];
+  if (provider === 'codex' && isCodexAppServerEnabled()) {
+    return { ...capabilities, supportsPermissionRequests: true };
+  }
+  return capabilities;
+}
+
+/**
  * Application service exposing the provider capability matrix.
  */
 export const providerCapabilitiesService = {
   getProviderCapabilities(provider: LLMProvider): ProviderCapabilities {
-    return PROVIDER_CAPABILITIES[provider];
+    return resolveCapabilities(provider);
   },
 
   listAllProviderCapabilities(): ProviderCapabilities[] {
-    return Object.values(PROVIDER_CAPABILITIES);
+    return Object.keys(PROVIDER_CAPABILITIES).map(
+      (provider) => resolveCapabilities(provider as LLMProvider),
+    );
   },
 };

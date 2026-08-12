@@ -7,7 +7,7 @@ import Database from 'better-sqlite3';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import type { AnyRecord } from '@/shared/types.js';
-import { AppError, getOpenCodeDatabasePath } from '@/shared/utils.js';
+import { AppError, extractCodexTokenBudget, getOpenCodeDatabasePath } from '@/shared/utils.js';
 
 type SessionRow = NonNullable<ReturnType<typeof sessionsDb.getSessionById>>;
 
@@ -32,6 +32,12 @@ type TokenUsageResult = {
   breakdown: {
     input: number;
     output: number;
+  };
+  accountUsage?: {
+    fiveHour: { utilization: number; resetsAt: number | null; severity: string } | null;
+    sevenDay: { utilization: number; resetsAt: number | null; severity: string } | null;
+    limits: Array<Record<string, unknown>>;
+    plan: string | null;
   };
   unsupported?: boolean;
   message?: string;
@@ -93,41 +99,28 @@ async function findCodexSessionFile(
 }
 
 function readCodexTokenUsage(fileContent: string): TokenUsageResult {
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let totalTokens = 0;
-  let contextWindow = 200_000;
   const lines = fileContent.trim().split('\n');
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
       const entry = JSON.parse(lines[index]) as AnyRecord;
-      const tokenInfo = entry.type === 'event_msg' && entry.payload?.type === 'token_count'
-        ? entry.payload.info
-        : null;
-      if (!tokenInfo) {
-        continue;
+      if (entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
+        const tokenBudget = extractCodexTokenBudget(entry.payload);
+        if (tokenBudget) {
+          return tokenBudget;
+        }
       }
-
-      if (tokenInfo.total_token_usage) {
-        inputTokens = readUsageNumber(tokenInfo.total_token_usage.input_tokens);
-        outputTokens = readUsageNumber(tokenInfo.total_token_usage.output_tokens);
-        totalTokens = readUsageNumber(tokenInfo.total_token_usage.total_tokens)
-          || inputTokens + outputTokens;
-      }
-      contextWindow = readUsageNumber(tokenInfo.model_context_window) || contextWindow;
-      break;
     } catch {
       // A provider may be writing the last JSONL line while this read happens.
     }
   }
 
   return {
-    used: totalTokens,
-    total: contextWindow,
-    inputTokens,
-    outputTokens,
-    breakdown: { input: inputTokens, output: outputTokens },
+    used: 0,
+    total: 200_000,
+    inputTokens: 0,
+    outputTokens: 0,
+    breakdown: { input: 0, output: 0 },
   };
 }
 
