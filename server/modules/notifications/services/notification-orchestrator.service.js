@@ -45,6 +45,11 @@ function isDuplicate(event) {
   return false;
 }
 
+/**
+ * @param {{ provider: string, sessionId?: string | null, kind?: string, code?: string,
+ *           meta?: object, severity?: string, dedupeKey?: string | null,
+ *           requiresUserAction?: boolean }} params
+ */
 function createNotificationEvent({
   provider,
   sessionId = null,
@@ -221,6 +226,9 @@ const notificationChannels = [
   }
 ];
 
+/**
+ * @param {{ userId: string | number | null, event: unknown }} params
+ */
 function notifyUserIfEnabled({ userId, event }) {
   if (!userId || !event) {
     return;
@@ -246,6 +254,10 @@ function notifyUserIfEnabled({ userId, event }) {
   }
 }
 
+/**
+ * @param {{ userId: string | number | null, provider: string, sessionId?: string | null,
+ *           stopReason?: string, sessionName?: string | null }} params
+ */
 function notifyRunStopped({ userId, provider, sessionId = null, stopReason = 'completed', sessionName = null }) {
   notifyUserIfEnabled({
     userId,
@@ -261,6 +273,10 @@ function notifyRunStopped({ userId, provider, sessionId = null, stopReason = 'co
   });
 }
 
+/**
+ * @param {{ userId: string | number | null, provider: string, sessionId?: string | null,
+ *           error?: unknown, sessionName?: string | null }} params
+ */
 function notifyRunFailed({ userId, provider, sessionId = null, error, sessionName = null }) {
   const errorMessage = normalizeErrorMessage(error);
 
