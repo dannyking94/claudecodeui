@@ -407,6 +407,7 @@ function ChatInterface({
           )}
 
           <ChatComposer
+          provider={provider}
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}

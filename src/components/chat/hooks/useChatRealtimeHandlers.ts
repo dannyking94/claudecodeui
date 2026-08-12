@@ -283,7 +283,11 @@ export function useChatRealtimeHandlers({
           // before the first send), so the only follow-up is syncing the
           // viewed conversation with the now-persisted transcript.
           if (sid && sid === activeViewSessionId) {
-            void sessionStore.refreshFromServer(sid);
+            void sessionStore.refreshFromServer(sid).then((slot) => {
+              if (sid === activeViewSessionIdRef.current && slot?.tokenUsage) {
+                setTokenBudget(slot.tokenUsage as Record<string, unknown>);
+              }
+            });
           }
 
           break;

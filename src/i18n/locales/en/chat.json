@@ -144,6 +144,7 @@
       "weekly": "Weekly: {{percent}}% used",
       "resetsIn": "resets in {{duration}}",
       "plan": "{{plan}} plan",
+      "stale": "Last known reading — refresh failed",
       "title": "Plan usage",
       "eyebrow": "Claude account",
       "subtitle": "Allowance remaining on the account signed in on this host.",
@@ -157,6 +158,30 @@
         "session": "Session (5h)",
         "weekly_all": "Weekly (all models)",
         "weekly_scoped": "Weekly"
+      }
+    },
+    "codexUsage": {
+      "label": "GPT",
+      "ariaLabel": "GPT plan usage",
+      "session": "5-hour: {{percent}}% used",
+      "weekly": "Weekly: {{percent}}% used",
+      "resetsIn": "resets in {{duration}}",
+      "plan": "{{plan}} plan",
+      "stale": "Last known reading — refresh failed",
+      "title": "GPT usage",
+      "eyebrow": "OpenAI account",
+      "subtitle": "Allowance used by the Codex account signed in on this host.",
+      "percentUsed": "{{percent}}% used",
+      "active": "active",
+      "resetsSoon": "Resetting now",
+      "close": "Close",
+      "noBreakdown": "No rate-limit windows are available for this account.",
+      "footnote": "Reported by Codex for the whole OpenAI account, across every client — not just this app.",
+      "kinds": {
+        "session": "5-hour window",
+        "weekly_all": "Weekly window",
+        "primary": "Primary window",
+        "secondary": "Secondary window"
       }
     }
   },

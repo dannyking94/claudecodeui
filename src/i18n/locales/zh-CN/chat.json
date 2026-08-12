@@ -144,6 +144,7 @@
       "weekly": "每周：已用 {{percent}}%",
       "resetsIn": "{{duration}} 后重置",
       "plan": "{{plan}} 套餐",
+      "stale": "上次获取的数据 — 刷新失败",
       "title": "套餐用量",
       "eyebrow": "Claude 账户",
       "subtitle": "此主机上已登录账户的剩余额度。",

@@ -125,6 +125,7 @@
       "weekly": "Woche: {{percent}} % genutzt",
       "resetsIn": "Zurücksetzung in {{duration}}",
       "plan": "{{plan}}-Tarif",
+      "stale": "Letzter bekannter Stand — Aktualisierung fehlgeschlagen",
       "title": "Tarifnutzung",
       "eyebrow": "Claude-Konto",
       "subtitle": "Verbleibendes Kontingent des auf diesem Host angemeldeten Kontos.",

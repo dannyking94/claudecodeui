@@ -73,7 +73,7 @@ function readWindow(value: unknown): ClaudeUsageWindow | null {
  * upstream failure. The caller renders nothing in every one of those cases, so
  * they need no separate error state.
  */
-export function useClaudeUsage(): ClaudeUsage | null {
+export function useClaudeUsage(enabled = true): ClaudeUsage | null {
   const [usage, setUsage] = useState<ClaudeUsage | null>(null);
   /**
    * An older server answers this unknown `/api` path with the SPA's index.html.
@@ -90,7 +90,7 @@ export function useClaudeUsage(): ClaudeUsage | null {
   const settledRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (unsupportedRef.current) {
+    if (!enabled || unsupportedRef.current) {
       return;
     }
 
@@ -122,6 +122,15 @@ export function useClaudeUsage(): ClaudeUsage | null {
       settledRef.current = true;
 
       if (payload.status !== 'ok') {
+        // `not_signed_in` and `disabled` describe the host and will not change
+        // between polls, so the pill should go away. `upstream_error` says
+        // only that the lookup failed — the allowance itself is unchanged, and
+        // blanking on it made the pill vanish for a minute at a time whenever
+        // the undocumented endpoint rate-limited us.
+        if (payload.reason === 'upstream_error') {
+          return;
+        }
+
         setUsage(null);
         return;
       }
@@ -136,6 +145,7 @@ export function useClaudeUsage(): ClaudeUsage | null {
               sevenDay,
               limits: readLimits(payload.limits),
               plan: typeof payload.plan === 'string' ? payload.plan : null,
+              stale: payload.stale === true,
             }
           : null,
       );
@@ -143,9 +153,13 @@ export function useClaudeUsage(): ClaudeUsage | null {
       // A transient network failure keeps the last known reading on screen
       // rather than blanking the pill; the next tick corrects it.
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
     let cancelled = false;
     let timer = 0;
 
@@ -194,7 +208,7 @@ export function useClaudeUsage(): ClaudeUsage | null {
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   return usage;
 }

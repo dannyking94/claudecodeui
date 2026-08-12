@@ -126,6 +126,7 @@
       "weekly": "Semaine : {{percent}} % utilisés",
       "resetsIn": "réinitialisation dans {{duration}}",
       "plan": "Forfait {{plan}}",
+      "stale": "Dernière valeur connue — échec de l’actualisation",
       "title": "Utilisation du forfait",
       "eyebrow": "Compte Claude",
       "subtitle": "Quota restant sur le compte connecté sur cet hôte.",

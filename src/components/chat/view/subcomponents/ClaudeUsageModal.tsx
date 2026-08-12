@@ -2,11 +2,12 @@ import { GaugeIcon, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Badge, Button, Dialog, DialogContent, DialogTitle } from '../../../../shared/view/ui';
-import type { ClaudeUsage, ClaudeUsageLimit } from '../../types/types';
+import type { ClaudeUsage, ClaudeUsageLimit, CodexUsage } from '../../types/types';
 import { SEVERITY_ACCENT, SEVERITY_BAR, formatResetDistance } from '../../utils/claudeUsage';
 
 type ClaudeUsageModalProps = {
-  usage: ClaudeUsage | null;
+  usage: ClaudeUsage | CodexUsage | null;
+  provider?: 'claude' | 'codex';
   open: boolean;
   onClose: () => void;
 };
@@ -28,8 +29,9 @@ function sortLimits(limits: ClaudeUsageLimit[]): ClaudeUsageLimit[] {
   );
 }
 
-export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageModalProps) {
+export default function ClaudeUsageModal({ usage, provider = 'claude', open, onClose }: ClaudeUsageModalProps) {
   const { t } = useTranslation('chat');
+  const translationKey = provider === 'codex' ? 'codexUsage' : 'claudeUsage';
 
   if (!usage) {
     return null;
@@ -41,7 +43,7 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
    * blank row or a missing one.
    */
   const describeLimit = (limit: ClaudeUsageLimit) => {
-    const label = t(`input.claudeUsage.kinds.${limit.kind}`, { defaultValue: limit.kind });
+    const label = t(`input.${translationKey}.kinds.${limit.kind}`, { defaultValue: limit.kind });
     return limit.scopeLabel ? `${label} · ${limit.scopeLabel}` : label;
   };
 
@@ -52,7 +54,7 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="flex w-[calc(100vw-1rem)] max-w-lg flex-col overflow-hidden rounded-3xl border-border/80 bg-popover/95 p-0 shadow-2xl backdrop-blur-xl">
-        <DialogTitle>{t('input.claudeUsage.title')}</DialogTitle>
+        <DialogTitle>{t(`input.${translationKey}.title`)}</DialogTitle>
 
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border bg-popover px-4 py-4 sm:px-6 sm:py-5">
           <div className="flex min-w-0 items-center gap-3">
@@ -61,13 +63,13 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
             </div>
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                {t('input.claudeUsage.eyebrow')}
+                {t(`input.${translationKey}.eyebrow`)}
               </p>
               <p className="mt-0.5 text-lg font-semibold tracking-tight text-foreground">
-                {t('input.claudeUsage.title')}
+                {t(`input.${translationKey}.title`)}
               </p>
               <p className="mt-0.5 text-sm leading-5 text-muted-foreground">
-                {t('input.claudeUsage.subtitle')}
+                {t(`input.${translationKey}.subtitle`)}
               </p>
             </div>
           </div>
@@ -78,7 +80,7 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
               variant="ghost"
               size="icon"
               onClick={onClose}
-              aria-label={t('input.claudeUsage.close')}
+              aria-label={t(`input.${translationKey}.close`)}
             >
               <X className="h-4 w-4" />
             </Button>
@@ -87,7 +89,7 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
 
         <div className="flex flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           {rows.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t('input.claudeUsage.noBreakdown')}</p>
+            <p className="text-sm text-muted-foreground">{t(`input.${translationKey}.noBreakdown`)}</p>
           )}
 
           {rows.map((limit) => {
@@ -103,12 +105,12 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
                       <span
                         className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${SEVERITY_ACCENT[limit.severity]}`}
                       >
-                        {t('input.claudeUsage.active')}
+                        {t(`input.${translationKey}.active`)}
                       </span>
                     )}
                   </span>
                   <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {t('input.claudeUsage.percentUsed', { percent })}
+                    {t(`input.${translationKey}.percentUsed`, { percent })}
                   </span>
                 </div>
 
@@ -123,15 +125,15 @@ export default function ClaudeUsageModal({ usage, open, onClose }: ClaudeUsageMo
 
                 <p className="text-xs text-muted-foreground">
                   {resetsIn
-                    ? t('input.claudeUsage.resetsIn', { duration: resetsIn })
-                    : t('input.claudeUsage.resetsSoon')}
+                    ? t(`input.${translationKey}.resetsIn`, { duration: resetsIn })
+                    : t(`input.${translationKey}.resetsSoon`)}
                 </p>
               </div>
             );
           })}
 
           <p className="border-t border-border/60 pt-3 text-xs leading-5 text-muted-foreground">
-            {t('input.claudeUsage.footnote')}
+            {t(`input.${translationKey}.footnote`)}
           </p>
         </div>
       </DialogContent>

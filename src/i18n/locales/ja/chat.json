@@ -123,6 +123,7 @@
       "weekly": "週間: {{percent}}% 使用",
       "resetsIn": "{{duration}} 後にリセット",
       "plan": "{{plan}} プラン",
+      "stale": "最後に取得した値 — 更新に失敗しました",
       "title": "プラン使用量",
       "eyebrow": "Claude アカウント",
       "subtitle": "このホストでサインイン中のアカウントの残り使用枠です。",

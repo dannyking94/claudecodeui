@@ -125,6 +125,7 @@
       "weekly": "Settimana: {{percent}}% utilizzato",
       "resetsIn": "reimpostazione tra {{duration}}",
       "plan": "Piano {{plan}}",
+      "stale": "Ultimo dato noto — aggiornamento non riuscito",
       "title": "Utilizzo del piano",
       "eyebrow": "Account Claude",
       "subtitle": "Quota residua dell'account connesso su questo host.",

@@ -125,6 +125,7 @@
       "weekly": "Haftalık: %{{percent}} kullanıldı",
       "resetsIn": "{{duration}} içinde sıfırlanır",
       "plan": "{{plan}} planı",
+      "stale": "Bilinen son değer — yenilenemedi",
       "title": "Plan kullanımı",
       "eyebrow": "Claude hesabı",
       "subtitle": "Bu makinede oturum açmış hesabın kalan kotası.",

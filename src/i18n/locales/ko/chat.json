@@ -144,6 +144,7 @@
       "weekly": "주간: {{percent}}% 사용",
       "resetsIn": "{{duration}} 후 초기화",
       "plan": "{{plan}} 플랜",
+      "stale": "마지막으로 확인된 값 — 새로 고침 실패",
       "title": "플랜 사용량",
       "eyebrow": "Claude 계정",
       "subtitle": "이 호스트에 로그인된 계정의 남은 사용량입니다.",

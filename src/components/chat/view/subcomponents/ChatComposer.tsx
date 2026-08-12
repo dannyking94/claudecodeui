@@ -15,9 +15,10 @@ import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon } from 'l
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
 import { useClaudeUsage } from '../../hooks/useClaudeUsage';
+import { readCodexUsage } from '../../utils/codexUsage';
 import type { QueuedDraft } from '../../hooks/useChatComposerState';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
-import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
+import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 import type { ProviderModelOption } from '../../../../types/app';
 import {
   PromptInput,
@@ -58,6 +59,7 @@ interface SlashCommand {
 }
 
 interface ChatComposerProps {
+  provider: Provider;
   pendingPermissionRequests: PendingPermissionRequest[];
   handlePermissionDecision: (
     requestIds: string | string[],
@@ -125,6 +127,7 @@ interface ChatComposerProps {
 }
 
 export default function ChatComposer({
+  provider,
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
@@ -200,11 +203,13 @@ export default function ChatComposer({
     };
   }, [isCommandMenuOpen, textareaRef]);
 
-  // Plan allowance for the account signed in on the server host. It sits beside
-  // the per-session token count so both "how much did this cost" and "how much
-  // is left" read from one place. Null whenever there is nothing to show.
-  const claudeUsage = useClaudeUsage();
-  const [isClaudeUsageOpen, setIsClaudeUsageOpen] = useState(false);
+  // The percentage pill follows the active provider. Claude is polled from its
+  // account endpoint; Codex rate limits arrive with this session's token data.
+  const claudeUsage = useClaudeUsage(provider === 'claude');
+  const codexUsage = useMemo(() => readCodexUsage(tokenBudget), [tokenBudget]);
+  const planUsage = provider === 'claude' ? claudeUsage : provider === 'codex' ? codexUsage : null;
+  const planUsageProvider = provider === 'codex' ? 'codex' : 'claude';
+  const [isPlanUsageOpen, setIsPlanUsageOpen] = useState(false);
 
   // Voice state is hosted here (not in the mic button) so the main Send button can stop
   // recording and send the transcript in one tap, the way the mic button drops it in the box.
@@ -404,7 +409,11 @@ export default function ChatComposer({
 
             <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
 
-            <ClaudeUsageSummary usage={claudeUsage} onClick={() => setIsClaudeUsageOpen(true)} />
+            <ClaudeUsageSummary
+              usage={planUsage}
+              provider={planUsageProvider}
+              onClick={() => setIsPlanUsageOpen(true)}
+            />
 
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
@@ -504,9 +513,10 @@ export default function ChatComposer({
         if the input area is hidden while the user is reading it.
       */}
       <ClaudeUsageModal
-        usage={claudeUsage}
-        open={isClaudeUsageOpen}
-        onClose={() => setIsClaudeUsageOpen(false)}
+        usage={planUsage}
+        provider={planUsageProvider}
+        open={isPlanUsageOpen}
+        onClose={() => setIsPlanUsageOpen(false)}
       />
     </div>
   );

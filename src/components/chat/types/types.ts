@@ -49,7 +49,16 @@ export type ClaudeUsage = {
   limits: ClaudeUsageLimit[];
   /** Plan label such as `max`, shown in the tooltip and dialog header. */
   plan: string | null;
+  /**
+   * True when the server could not reach upstream and is retaining an earlier
+   * reading. The pill still shows the number — a percentage from a few minutes
+   * ago is far more useful than a gap — but dims it and says so in the tooltip.
+   */
+  stale?: boolean;
 };
+
+/** GPT/Codex account allowance emitted alongside a session's token snapshot. */
+export type CodexUsage = ClaudeUsage;
 
 export interface ChatAttachment {
   /** Absolute path inside the server-managed chat attachment store. */

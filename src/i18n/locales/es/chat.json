@@ -144,6 +144,7 @@
       "weekly": "Semanal: {{percent}} % usado",
       "resetsIn": "se restablece en {{duration}}",
       "plan": "Plan {{plan}}",
+      "stale": "Última lectura conocida — no se pudo actualizar",
       "title": "Uso del plan",
       "eyebrow": "Cuenta de Claude",
       "subtitle": "Cuota restante de la cuenta con sesión iniciada en este host.",

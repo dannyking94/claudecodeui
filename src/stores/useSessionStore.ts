@@ -599,6 +599,9 @@ export function useSessionStore() {
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
+      if (data.tokenUsage !== undefined) {
+        slot.tokenUsage = data.tokenUsage;
+      }
       // Only drop realtime rows the server transcript now owns. A blind clear
       // here caused the chat pane to flash "Continue your conversation" after
       // `complete` while JSONL / provider_session_id indexing was still behind.
@@ -608,8 +611,10 @@ export function useSessionStore() {
       );
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
+      return slot;
     } catch (error) {
       console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
+      return slot;
     }
   }, [getSlot, notify]);
 

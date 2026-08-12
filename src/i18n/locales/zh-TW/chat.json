@@ -125,6 +125,7 @@
       "weekly": "每週：已用 {{percent}}%",
       "resetsIn": "{{duration}} 後重設",
       "plan": "{{plan}} 方案",
+      "stale": "上次取得的資料 — 重新整理失敗",
       "title": "方案用量",
       "eyebrow": "Claude 帳戶",
       "subtitle": "此主機上已登入帳戶的剩餘額度。",
