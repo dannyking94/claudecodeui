@@ -11,6 +11,7 @@ import {
 
 import GpuCard from './subcomponents/GpuCard';
 import MetricMeter from './subcomponents/MetricMeter';
+import RemoteHostCard from './subcomponents/RemoteHostCard';
 import TimeSeriesMetric from './subcomponents/TimeSeriesMetric';
 
 type SystemStatusDrawerProps = {
@@ -50,6 +51,9 @@ export default function SystemStatusDrawer({ isOpen, onClose, isMobile }: System
   const memoryPercentage = latest
     ? toPercentage(latest.memoryUsedBytes, latest.memoryTotalBytes)
     : 0;
+  // Configured hosts always have an entry, reachable or not, so the list only
+  // disappears when none are configured — and the local host stays unlabelled.
+  const remotes = latest?.remotes ?? [];
 
   const body = (
     <>
@@ -72,6 +76,12 @@ export default function SystemStatusDrawer({ isOpen, onClose, isMobile }: System
           <p className="text-xs text-muted-foreground">{t('systemStatus.unavailable')}</p>
         ) : (
           <>
+            {remotes.length > 0 && latest && (
+              <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                {t('systemStatus.thisMachine')}
+              </h3>
+            )}
+
             {gpuAvailable && latest
               ? latest.gpus.map((gpu) => (
                   <GpuCard
@@ -119,6 +129,13 @@ export default function SystemStatusDrawer({ isOpen, onClose, isMobile }: System
             ) : (
               <p className="text-xs text-muted-foreground">{t('systemStatus.waiting')}</p>
             )}
+
+            {remotes.map((host) => (
+              <div key={host.id} className="space-y-5">
+                <div className="h-px bg-border/60" />
+                <RemoteHostCard host={host} samples={samples} t={t} />
+              </div>
+            ))}
           </>
         )}
       </div>

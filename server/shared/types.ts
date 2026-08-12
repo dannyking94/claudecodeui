@@ -1236,3 +1236,52 @@ export type CliApplication = {
 export type SandboxCommandService = {
   execute(argumentsList: string[]): Promise<number>;
 };
+
+// ---------------------------
+//----------------- HOST TELEMETRY CONTRACTS ------------
+/**
+ * One GPU's reading from a single `nvidia-smi` query.
+ *
+ * Produced by `parseNvidiaSmiOutput` for both the local host and any remote
+ * host sampled over SSH, so the status panel renders either with one card
+ * component. `index` is the driver's GPU index and is the stable key within a
+ * host. Temperature and power are nullable because `nvidia-smi` legitimately
+ * reports `[N/A]` for them on many virtualized and datacenter cards.
+ */
+export type GpuSample = {
+  index: number;
+  name: string;
+  utilization: number;
+  memoryUsedMb: number;
+  memoryTotalMb: number;
+  temperatureC: number | null;
+  powerDrawW: number | null;
+  powerLimitW: number | null;
+};
+
+/**
+ * One remote host's reading, embedded in every local telemetry sample.
+ *
+ * Remote hosts are polled independently of the 1 Hz local tick, so each frame
+ * carries the most recent cached reading for every configured host. When that
+ * reading is missing or too old to present as current, `online` is false and
+ * the metric fields are null rather than stale numbers — the panel shows the
+ * host as unreachable instead of drawing a frozen line as if it were live.
+ *
+ * `id` is derived from the SSH target and is stable across restarts, which is
+ * what lets the client match a host across samples when building sparklines.
+ */
+export type RemoteHostSample = {
+  id: string;
+  label: string;
+  online: boolean;
+  /** When the reading was taken, not when the frame was built. */
+  timestamp: number;
+  /** Null on the first sample of a polling run: CPU load needs two readings. */
+  cpuUtilization: number | null;
+  memoryUsedBytes: number | null;
+  memoryTotalBytes: number | null;
+  gpus: GpuSample[];
+  /** Short failure reason shown when `online` is false. */
+  error: string | null;
+};

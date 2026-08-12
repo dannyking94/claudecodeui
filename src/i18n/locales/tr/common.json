@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "Bellek",
     "noGpu": "NVIDIA GPU bulunamadı",
+    "thisMachine": "Bu makine",
+    "unreachable": "Erişilemiyor",
     "unavailable": "Bu kurulumda ana makine durumu kullanılamıyor",
     "serverOutdated": "Ana makine durumunu etkinleştirmek için sunucuyu yeniden başlatın",
     "waiting": "Veri bekleniyor…",

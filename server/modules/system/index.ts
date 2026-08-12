@@ -6,6 +6,5 @@ export {
   stopSystemStatsCollectionIfIdle,
   subscribeToSystemStats,
   unsubscribeFromSystemStats,
-  type GpuSample,
   type SystemStatsSample,
 } from './system-stats.service.js';

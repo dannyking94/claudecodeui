@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "記憶體",
     "noGpu": "未偵測到 NVIDIA GPU",
+    "thisMachine": "本機",
+    "unreachable": "無法連線",
     "unavailable": "此部署不提供主機狀態",
     "serverOutdated": "需要重新啟動伺服器才能啟用主機狀態",
     "waiting": "正在等待資料…",

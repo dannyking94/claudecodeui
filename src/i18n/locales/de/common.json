@@ -244,6 +244,8 @@
     "cpu": "CPU",
     "memory": "Arbeitsspeicher",
     "noGpu": "Keine NVIDIA-GPU erkannt",
+    "thisMachine": "Dieser Rechner",
+    "unreachable": "Nicht erreichbar",
     "unavailable": "Hoststatus ist in dieser Umgebung nicht verfügbar",
     "serverOutdated": "Serverneustart erforderlich, um den Hoststatus zu aktivieren",
     "waiting": "Warte auf Daten…",

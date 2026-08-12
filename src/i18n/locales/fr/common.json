@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "Mémoire",
     "noGpu": "Aucun GPU NVIDIA détecté",
+    "thisMachine": "Cette machine",
+    "unreachable": "Injoignable",
     "unavailable": "L'état de l'hôte n'est pas disponible dans ce déploiement",
     "serverOutdated": "Redémarrage du serveur requis pour activer l'état de l'hôte",
     "waiting": "En attente de données…",

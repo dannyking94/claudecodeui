@@ -23,6 +23,7 @@ import type {
   AnyRecord,
   ApiSuccessShape,
   AppErrorOptions,
+  GpuSample,
   NormalizedMessage,
   ProviderCurrentActiveModel,
   ProviderModelsDefinition,
@@ -1148,4 +1149,82 @@ export function findApplicationRoot(startDirectory: string): string {
   return path.basename(parentDirectory) === 'dist-server'
     ? path.dirname(parentDirectory)
     : parentDirectory;
+}
+
+// ---------------------------
+//----------------- NVIDIA GPU TELEMETRY UTILITIES ------------
+/**
+ * Arguments that make `nvidia-smi` print one unit-less CSV row per GPU.
+ *
+ * Shared by the local sampler, which spawns `nvidia-smi` directly, and the
+ * remote sampler, which joins these into the shell command it sends over SSH.
+ * Both consumers depend on the field order matching `parseNvidiaSmiOutput`, so
+ * the query and the parser must always be changed together. The arguments
+ * contain no whitespace or shell metacharacters, which is what makes joining
+ * them into a remote command line safe.
+ */
+export const NVIDIA_SMI_QUERY_ARGUMENTS: readonly string[] = [
+  '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit',
+  '--format=csv,noheader,nounits',
+];
+
+/** Number of CSV columns `NVIDIA_SMI_QUERY_ARGUMENTS` produces per GPU. */
+const NVIDIA_SMI_COLUMN_COUNT = 8;
+
+/** Parses one nvidia-smi CSV field, mapping `[N/A]` and junk to null. */
+function parseNvidiaNumericField(raw: string | undefined): number | null {
+  if (raw === undefined) {
+    return null;
+  }
+
+  const value = Number.parseFloat(raw.trim());
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Turns `--format=csv,noheader,nounits` output into one sample per GPU.
+ *
+ * Used by the local and remote host samplers, which obtain the same text from
+ * a local subprocess and from an SSH command respectively. Rows missing index,
+ * utilization or memory are dropped: those drive the whole panel and cannot be
+ * rendered meaningfully, whereas temperature and power may legitimately be
+ * `[N/A]` and are kept as null. Any leading text an SSH session prepends (a
+ * banner, for instance) is skipped by the same rule.
+ */
+export function parseNvidiaSmiOutput(output: string): GpuSample[] {
+  const gpus: GpuSample[] = [];
+
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+
+    const columns = trimmed.split(',');
+    if (columns.length < NVIDIA_SMI_COLUMN_COUNT) {
+      continue;
+    }
+
+    const index = parseNvidiaNumericField(columns[0]);
+    const utilization = parseNvidiaNumericField(columns[2]);
+    const memoryUsedMb = parseNvidiaNumericField(columns[3]);
+    const memoryTotalMb = parseNvidiaNumericField(columns[4]);
+
+    if (index === null || utilization === null || memoryUsedMb === null || memoryTotalMb === null) {
+      continue;
+    }
+
+    gpus.push({
+      index,
+      name: columns[1].trim(),
+      utilization,
+      memoryUsedMb,
+      memoryTotalMb,
+      temperatureC: parseNvidiaNumericField(columns[5]),
+      powerDrawW: parseNvidiaNumericField(columns[6]),
+      powerLimitW: parseNvidiaNumericField(columns[7]),
+    });
+  }
+
+  return gpus;
 }

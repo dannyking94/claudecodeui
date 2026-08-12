@@ -3,7 +3,14 @@ import os from 'node:os';
 import spawn from 'cross-spawn';
 
 import { WS_OPEN_STATE } from '@/modules/websocket/index.js';
-import type { RealtimeClientConnection } from '@/shared/types.js';
+import type { GpuSample, RealtimeClientConnection, RemoteHostSample } from '@/shared/types.js';
+import { NVIDIA_SMI_QUERY_ARGUMENTS, parseNvidiaSmiOutput } from '@/shared/utils.js';
+
+import {
+  getRemoteHostSamples,
+  refreshRemoteHostSamples,
+  stopRemoteStatsCollection,
+} from './remote-stats.service.js';
 
 /** How often a sample is taken while at least one client is watching. */
 const SAMPLE_INTERVAL_MS = 1_000;
@@ -18,34 +25,14 @@ const HISTORY_MAX_AGE_MS = 60_000;
 /** A wedged driver must not accumulate child processes across ticks. */
 const NVIDIA_SMI_TIMEOUT_MS = 2_000;
 
-const NVIDIA_SMI_FIELDS = [
-  'index',
-  'name',
-  'utilization.gpu',
-  'memory.used',
-  'memory.total',
-  'temperature.gpu',
-  'power.draw',
-  'power.limit',
-] as const;
-
-export type GpuSample = {
-  index: number;
-  name: string;
-  utilization: number;
-  memoryUsedMb: number;
-  memoryTotalMb: number;
-  temperatureC: number | null;
-  powerDrawW: number | null;
-  powerLimitW: number | null;
-};
-
 export type SystemStatsSample = {
   timestamp: number;
   cpuUtilization: number;
   memoryUsedBytes: number;
   memoryTotalBytes: number;
   gpus: GpuSample[];
+  /** Cached readings for the hosts in `CLOUDCLI_REMOTE_HOSTS`; empty if none. */
+  remotes: RemoteHostSample[];
 };
 
 type CpuTimesSnapshot = {
@@ -111,58 +98,6 @@ function readCpuUtilization(): number {
   return Math.min(100, Math.max(0, Math.round(utilization)));
 }
 
-/** Parses one nvidia-smi CSV field, mapping `[N/A]` and junk to null. */
-function parseNumericField(raw: string | undefined): number | null {
-  if (raw === undefined) {
-    return null;
-  }
-
-  const value = Number.parseFloat(raw.trim());
-  return Number.isFinite(value) ? value : null;
-}
-
-/** Turns `--format=csv,noheader,nounits` output into one sample per GPU. */
-export function parseNvidiaSmiOutput(output: string): GpuSample[] {
-  const gpus: GpuSample[] = [];
-
-  for (const line of output.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) {
-      continue;
-    }
-
-    const columns = trimmed.split(',');
-    if (columns.length < NVIDIA_SMI_FIELDS.length) {
-      continue;
-    }
-
-    const index = parseNumericField(columns[0]);
-    const utilization = parseNumericField(columns[2]);
-    const memoryUsedMb = parseNumericField(columns[3]);
-    const memoryTotalMb = parseNumericField(columns[4]);
-
-    // Index, utilization and memory drive the whole panel; a row missing any of
-    // them cannot be rendered meaningfully, so it is dropped rather than shown
-    // as zeroes. Temperature and power are optional and may legitimately be N/A.
-    if (index === null || utilization === null || memoryUsedMb === null || memoryTotalMb === null) {
-      continue;
-    }
-
-    gpus.push({
-      index,
-      name: columns[1].trim(),
-      utilization,
-      memoryUsedMb,
-      memoryTotalMb,
-      temperatureC: parseNumericField(columns[5]),
-      powerDrawW: parseNumericField(columns[6]),
-      powerLimitW: parseNumericField(columns[7]),
-    });
-  }
-
-  return gpus;
-}
-
 /**
  * Runs one nvidia-smi query, resolving to null when the tool is absent, fails,
  * or does not answer within the timeout.
@@ -181,10 +116,7 @@ function queryGpus(): Promise<GpuSample[] | null> {
       resolve(result);
     };
 
-    const child = spawn('nvidia-smi', [
-      `--query-gpu=${NVIDIA_SMI_FIELDS.join(',')}`,
-      '--format=csv,noheader,nounits',
-    ]);
+    const child = spawn('nvidia-smi', [...NVIDIA_SMI_QUERY_ARGUMENTS]);
 
     const timeoutHandle = setTimeout(() => {
       child.kill('SIGKILL');
@@ -226,6 +158,9 @@ async function collectSample(): Promise<SystemStatsSample> {
     memoryUsedBytes: totalMemory - os.freemem(),
     memoryTotalBytes: totalMemory,
     gpus: gpus ?? [],
+    // Whatever the independent remote pollers have cached by now. They are
+    // never awaited here, so an unreachable host cannot stall the local sample.
+    remotes: getRemoteHostSamples(),
   };
 }
 
@@ -271,6 +206,10 @@ async function tick(): Promise<void> {
   sampleInFlight = true;
   const generation = pollGeneration;
   try {
+    // Fire-and-forget: this only starts the SSH samples that are due. Their
+    // results land in the remote cache and ride along with a later tick.
+    refreshRemoteHostSamples();
+
     const sample = await collectSample();
 
     // Polling stopped while this sample was being taken — discard it.
@@ -317,6 +256,7 @@ function stopPolling(): void {
   clearInterval(pollTimer);
   pollTimer = null;
   pollGeneration += 1;
+  stopRemoteStatsCollection();
 }
 
 /** History still recent enough to prefill a client's 60-second window. */

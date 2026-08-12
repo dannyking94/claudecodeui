@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "メモリ",
     "noGpu": "NVIDIA GPU が見つかりません",
+    "thisMachine": "このマシン",
+    "unreachable": "接続できません",
     "unavailable": "この環境ではホストの状態を表示できません",
     "serverOutdated": "ホストの状態を有効にするにはサーバーの再起動が必要です",
     "waiting": "データを待機中…",

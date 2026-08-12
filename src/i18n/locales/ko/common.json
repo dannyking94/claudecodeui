@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "메모리",
     "noGpu": "NVIDIA GPU를 찾을 수 없습니다",
+    "thisMachine": "이 컴퓨터",
+    "unreachable": "연결할 수 없음",
     "unavailable": "이 배포에서는 호스트 상태를 사용할 수 없습니다",
     "serverOutdated": "호스트 상태를 사용하려면 서버를 다시 시작해야 합니다",
     "waiting": "데이터를 기다리는 중…",

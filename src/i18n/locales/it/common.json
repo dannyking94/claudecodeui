@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "Memoria",
     "noGpu": "Nessuna GPU NVIDIA rilevata",
+    "thisMachine": "Questo computer",
+    "unreachable": "Non raggiungibile",
     "unavailable": "Lo stato dell'host non è disponibile in questa installazione",
     "serverOutdated": "Riavvio del server necessario per attivare lo stato dell'host",
     "waiting": "In attesa di dati…",

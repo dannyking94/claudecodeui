@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "内存",
     "noGpu": "未检测到 NVIDIA GPU",
+    "thisMachine": "本机",
+    "unreachable": "无法连接",
     "unavailable": "此部署不提供主机状态",
     "serverOutdated": "需要重启服务器才能启用主机状态",
     "waiting": "正在等待数据…",

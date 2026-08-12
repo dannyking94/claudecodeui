@@ -274,6 +274,8 @@
     "cpu": "CPU",
     "memory": "Memory",
     "noGpu": "No NVIDIA GPU detected",
+    "thisMachine": "This machine",
+    "unreachable": "Unreachable",
     "unavailable": "Host status is not available in this deployment",
     "serverOutdated": "Server restart required to enable host status",
     "waiting": "Waiting for data…",
