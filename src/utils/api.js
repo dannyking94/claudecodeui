@@ -84,6 +84,13 @@ export const storeAuthToken = (token) => {
     return false;
   }
 
+  // Already current — skip the write and, more importantly, the refresh
+  // event. Several in-flight responses can carry the same refreshed token,
+  // and re-announcing it just churns auth state downstream.
+  if (localStorage.getItem('auth-token') === token) {
+    return true;
+  }
+
   localStorage.setItem('auth-token', token);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, { detail: token }));

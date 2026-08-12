@@ -77,6 +77,22 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { isLoading: isAuthLoading, token, user } = useAuth();
+  /**
+   * Token by ref: `connect` reads this at connect time instead of closing
+   * over the token, so (a) a background X-Refreshed-Token rotation does not
+   * tear down a healthy authenticated socket, and (b) the 3s reconnect timer
+   * always dials with the latest token rather than the one captured when the
+   * timer was scheduled.
+   */
+  const tokenRef = useRef<string | null>(token);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  // Connection identity, not object identity: `user` is a fresh object on
+  // every auth check, and reconnecting on it churned the socket for no reason.
+  const username = user?.username ?? null;
 
   const dispatch = useCallback((event: ServerEvent) => {
     for (const listener of listenersRef.current) {
@@ -94,7 +110,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     // re-run of the effect (e.g. on token refresh) would short-circuit connect()
     // at its unmounted guard and leave the socket permanently disconnected.
     unmountedRef.current = false;
-    if (!IS_PLATFORM && (isAuthLoading || !user)) {
+    if (!IS_PLATFORM && (isAuthLoading || !username)) {
       return undefined;
     }
     connect();
@@ -116,14 +132,13 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         wsRef.current = null;
       }
     };
-  }, [isAuthLoading, token, user]); // reconnect after authentication or token refresh
+  }, [isAuthLoading, username]); // reconnect on login/logout, not on token refresh
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return; // Prevent connection if unmounted
-    if (!IS_PLATFORM && (isAuthLoading || !user)) return;
     try {
-      // Construct WebSocket URL
-      const wsUrl = buildWebSocketUrl(token);
+      // Construct WebSocket URL with the freshest token available
+      const wsUrl = buildWebSocketUrl(tokenRef.current);
 
       if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
 
@@ -171,7 +186,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     } catch (error) {
       console.error('Error creating WebSocket connection:', error);
     }
-  }, [dispatch, isAuthLoading, token, user]); // reconnect with current authentication state
+  }, [dispatch]); // auth state is read via tokenRef / gated by the effect above
 
   const sendMessage = useCallback((message: unknown) => {
     const socket = wsRef.current;

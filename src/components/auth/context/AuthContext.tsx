@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { IS_PLATFORM } from '../../../constants/config';
 import {
   api,
@@ -48,6 +48,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Current token, readable without subscribing to it. `checkAuthStatus`
+   * reads this ref so a background token refresh (X-Refreshed-Token) does
+   * not recreate the callback and re-trigger the whole auth bootstrap —
+   * that re-trigger chain (isLoading flash → new user object → websocket
+   * teardown → more requests → another refresh) is a feedback loop.
+   */
+  const tokenRef = useRef<string | null>(token);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   const setSession = useCallback((nextUser: AuthUser, nextToken: string) => {
     setUser(nextUser);
@@ -139,7 +151,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setNeedsSetup(false);
 
-      if (!token) {
+      if (!tokenRef.current) {
         return;
       }
 
@@ -163,7 +175,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [checkOnboardingStatus, clearSession, token]);
+  }, [checkOnboardingStatus, clearSession]);
+
+  // Re-validate only when a token appears or disappears (login/logout).
+  // Depending on the token string itself made every background refresh
+  // re-run the bootstrap, flashing the loading screen each time.
+  const hasToken = Boolean(token);
 
   useEffect(() => {
     if (IS_PLATFORM) {
@@ -176,7 +193,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
 
     void checkAuthStatus();
-  }, [checkAuthStatus, checkOnboardingStatus]);
+  }, [checkAuthStatus, checkOnboardingStatus, hasToken]);
 
   useEffect(() => {
     if (IS_PLATFORM || !token || !user) {
