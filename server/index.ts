@@ -14,6 +14,7 @@ import {
     closeSessionsWatcher,
     initializeSessionsWatcher,
     providerRuntimeService,
+    restampCloudcliClaudeTranscripts,
 } from '@/modules/providers/index.js';
 import { createWebSocketServer, openSpontaneousChatRun } from '@/modules/websocket/index.js';
 
@@ -369,6 +370,20 @@ async function startServer() {
 
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();
+
+            // The initial synchronization above indexed every transcript, so
+            // sessions CloudCLI started before this build can now be restamped
+            // into view in Claude Code's VS Code extension. Backfill only; new
+            // sessions are restamped by the Claude runtime as they finish.
+            restampCloudcliClaudeTranscripts()
+                .then((restampedSessions) => {
+                    if (restampedSessions > 0) {
+                        console.log(`[INFO] Restored ${restampedSessions} Claude session(s) to the VS Code extension history`);
+                    }
+                })
+                .catch((err) => {
+                    console.warn('[WARN] Could not restamp Claude transcripts:', err.message);
+                });
 
             // Start server-side plugin processes for enabled plugins
             startEnabledPluginServers().catch(err => {

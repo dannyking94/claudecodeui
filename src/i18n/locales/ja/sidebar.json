@@ -32,7 +32,9 @@
     "loadingSessions": "セッションを読み込んでいます...",
     "unnamed": "名称未設定",
     "loading": "読み込み中...",
-    "showMore": "さらにセッションを表示"
+    "showMore": "さらにセッションを表示",
+    "showAllSessions": "他 {{hidden}} 件を表示",
+    "showFewerSessions": "折りたたむ"
   },
   "tooltips": {
     "viewEnvironments": "環境を表示",

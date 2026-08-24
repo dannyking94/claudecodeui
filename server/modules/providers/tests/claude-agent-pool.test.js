@@ -219,6 +219,43 @@ test('idle bookkeeping frames do not open a run', async () => {
   assert.equal(agent.hasActiveTurn(), false);
 });
 
+test('a mid-session model switch does not strand the turn that follows it', async () => {
+  const opened = [];
+  const { agent, fake } = setup({
+    openSpontaneousRun: (input) => {
+      opened.push(input);
+      return { writer: {}, complete: () => {} };
+    },
+  });
+
+  const first = agent.runTurn({ type: 'user' }, { id: 'writer' });
+  fake.emit(INIT);
+  fake.emit(RESULT);
+  await first;
+
+  await agent.applyTurnSettings({ model: 'model-b', permissionMode: 'default' });
+  assert.deepEqual(fake.modelChanges, ['model-b']);
+
+  // The CLI echoes the change back as a replayed *user* frame, which arrives
+  // while the send that carried the switch is still applying its settings —
+  // before its turn is claimed. Nothing ever answers that frame, so a run
+  // opened for it would hold the session until the stalled-turn sweeper.
+  fake.emit({
+    type: 'user',
+    message: { role: 'user', content: '<local-command-stdout>Set model to model-b</local-command-stdout>' },
+    isReplay: true,
+  });
+  await drain();
+
+  assert.deepEqual(opened, []);
+  assert.equal(agent.hasActiveTurn(), false);
+
+  const next = agent.runTurn({ type: 'user' }, { id: 'writer-2' });
+  fake.emit(INIT);
+  fake.emit(RESULT);
+  assert.equal((await next).error, null);
+});
+
 test('interrupting a turn settles it without ending the session', async () => {
   const { agent, fake } = setup();
 

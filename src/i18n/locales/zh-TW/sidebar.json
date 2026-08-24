@@ -32,7 +32,9 @@
     "loadingSessions": "載入工作階段中...",
     "unnamed": "未命名",
     "loading": "載入中...",
-    "showMore": "顯示更多工作階段"
+    "showMore": "顯示更多工作階段",
+    "showAllSessions": "顯示另外 {{hidden}} 個",
+    "showFewerSessions": "收合"
   },
   "tooltips": {
     "viewEnvironments": "查看環境",

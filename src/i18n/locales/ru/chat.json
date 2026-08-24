@@ -111,8 +111,8 @@
     "send": "Отправить",
     "stop": "Остановить",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter для отправки • Shift+Enter для новой строки • Tab для смены режима • / для команд",
-      "enter": "Enter для отправки • Shift+Enter для новой строки • Tab для смены режима • / для команд"
+      "ctrlEnter": "Ctrl+Enter для отправки • Shift+Enter для новой строки • Tab для смены режима",
+      "enter": "Enter для отправки • Shift+Enter для новой строки • Tab для смены режима"
     },
     "clickToChangeMode": "Нажмите для смены режима разрешений (или нажмите Tab в поле ввода)",
     "showAllCommands": "Показать все команды",

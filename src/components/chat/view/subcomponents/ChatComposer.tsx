@@ -393,8 +393,8 @@ export default function ChatComposer({
             />
         </PromptInputBody>
 
-        <PromptInputFooter>
-          <PromptInputTools className="min-w-0">
+        <PromptInputFooter className="lg:gap-2">
+          <PromptInputTools className="min-w-0 lg:shrink-0">
             <PromptInputButton
               tooltip={{ content: t('input.attachFiles') }}
               onClick={openAttachmentPicker}
@@ -442,15 +442,23 @@ export default function ChatComposer({
 
           </PromptInputTools>
 
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <div
-              className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {submitHint}
-            </div>
+          {/*
+            The hint is the only elastic column in the footer: the tool pills on
+            the left and the controls on the right both keep their intrinsic
+            width, so any deficit is absorbed here as an ellipsis instead of the
+            two groups sliding over each other. Locales longer than English (and
+            future pills) therefore degrade rather than overlap.
+          */}
+          <div
+            className={`hidden min-w-0 flex-1 truncate text-right text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
+              input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
+            }`}
+            title={submitHint}
+          >
+            {submitHint}
+          </div>
 
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <ComposerModelMenu
               effort={effort}
               effortOptions={availableEffortOptions}

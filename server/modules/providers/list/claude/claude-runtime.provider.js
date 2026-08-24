@@ -26,6 +26,7 @@ import {
 } from '@/shared/image-attachments.js';
 import { claudeAgentPool } from '@/modules/providers/list/claude/claude-agent-pool.provider.js';
 import { CLAUDE_FALLBACK_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
+import { restampClaudeTranscriptEntrypoint } from '@/modules/providers/list/claude/claude-transcript-entrypoint.provider.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import {
   createNotificationEvent,
@@ -187,8 +188,12 @@ function mapCliOptionsToSDK(options = {}) {
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = { ...process.env };
 
-  // The CLI stamps this into every transcript record. Left unset, the SDK marks the
-  // session "sdk-ts", which Claude Code's VS Code extension filters out of its session list.
+  // Left unset, the SDK marks the subprocess "sdk-ts". This keeps the value
+  // honest for anything that reads the env before the CLI boots, but it does
+  // NOT reach the transcript: the CLI overwrites CLAUDE_CODE_ENTRYPOINT with
+  // "sdk-cli" whenever it is driven over --input-format stream-json, and that
+  // is what it stamps into every record. Transcript visibility in Claude
+  // Code's VS Code extension is handled by claude-transcript-entrypoint.provider.
   sdkOptions.env.CLAUDE_CODE_ENTRYPOINT ??= 'cli';
 
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
@@ -887,6 +892,16 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         removeSession(sessionKey());
       }
     }
+
+    // The CLI has finished writing this turn's records, each stamped with the
+    // "sdk-cli" entrypoint that hides the session from Claude Code's VS Code
+    // extension. Rewrite them now; it never blocks the turn's completion.
+    restampClaudeTranscriptEntrypoint({
+      providerSessionId: state.capturedSessionId,
+      cwd: options.cwd,
+    }).catch((error) => {
+      console.warn('[Claude SDK] Could not restamp transcript entrypoint:', error?.message || error);
+    });
 
     // Send the terminal completion event — skipped for aborted runs, whose
     // terminal `complete` (aborted: true) was already sent by abort-session.

@@ -53,6 +53,16 @@ const WAKEUP_MAX_SECONDS = 3600;
 const TURN_OPENING_TYPES = new Set(['assistant', 'user', 'stream_event']);
 
 function opensTurn(message) {
+  // A replayed frame is the CLI restating something rather than working:
+  // `setModel` echoes `<local-command-stdout>Set model to …` as a *user* frame
+  // with `isReplay`, and a resume replays history the same way. Neither is
+  // followed by a `result`, so opening a turn for one wedges the session until
+  // the stalled-turn sweeper reclaims it — which is what a mid-session model
+  // switch used to do, since the echo lands while `applyTurnSettings` is still
+  // awaiting and the turn it belongs to has not been claimed yet.
+  if (message?.isReplay) {
+    return false;
+  }
   if (message?.type === 'system') {
     return message.subtype === 'init';
   }

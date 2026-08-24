@@ -1,4 +1,5 @@
-import { Plus } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -37,6 +38,13 @@ type SidebarProjectSessionsProps = {
   onNewSession: (project: Project) => void;
   t: TFunction;
 };
+
+/**
+ * Rows shown per project before the rest are folded away. Three keeps a project
+ * with a long history from pushing every other project off the sidebar, while
+ * still covering the "jump back to what I was just doing" case.
+ */
+const VISIBLE_SESSION_LIMIT = 3;
 
 function SessionListSkeleton() {
   return (
@@ -80,11 +88,34 @@ export default function SidebarProjectSessions({
   onNewSession,
   t,
 }: SidebarProjectSessionsProps) {
+  const [isShowingAllSessions, setIsShowingAllSessions] = useState(false);
+
   if (!isExpanded) {
     return null;
   }
 
   const hasSessions = sessions.length > 0;
+  const isFoldable = sessions.length > VISIBLE_SESSION_LIMIT;
+  const isFolded = isFoldable && !isShowingAllSessions;
+
+  // A selection past the cut would otherwise disappear the moment it is opened,
+  // so the fold keeps the current session pinned below the first three rows
+  // rather than hiding where the user actually is.
+  const selectedIndex = selectedSession
+    ? sessions.findIndex((session) => session.id === selectedSession.id)
+    : -1;
+  const visibleSessions = !isFolded
+    ? sessions
+    : selectedIndex >= VISIBLE_SESSION_LIMIT
+      ? [...sessions.slice(0, VISIBLE_SESSION_LIMIT), sessions[selectedIndex]]
+      : sessions.slice(0, VISIBLE_SESSION_LIMIT);
+
+  const foldedSessions = sessions.filter((session) => !visibleSessions.includes(session));
+  // Folding must not swallow the green/amber dots: a session that is running or
+  // waiting on the user still reports itself through the toggle.
+  const foldedLiveCount = foldedSessions.filter(
+    (session) => activeSessions.has(session.id) || attentionSessionIds.has(session.id),
+  ).length;
 
   return (
     <div className="ml-3 space-y-1 border-l border-border pl-3">
@@ -119,7 +150,7 @@ export default function SidebarProjectSessions({
         </div>
       ) : (
         <>
-          {sessions.map((session) => (
+          {visibleSessions.map((session) => (
             <SidebarSessionItem
               key={session.id}
               project={project}
@@ -141,7 +172,40 @@ export default function SidebarProjectSessions({
             />
           ))}
 
-          {hasMoreSessions && (
+          {isFoldable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-full justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setIsShowingAllSessions((previous) => !previous)}
+              aria-expanded={!isFolded}
+            >
+              {isFolded ? (
+                <>
+                  <ChevronDown className="h-3 w-3" />
+                  {t('sessions.showAllSessions', {
+                    hidden: foldedSessions.length,
+                    defaultValue: 'Show {{hidden}} more',
+                  })}
+                  {foldedLiveCount > 0 && (
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"
+                      aria-label={t('tooltips.activeSessionIndicator')}
+                    />
+                  )}
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="h-3 w-3" />
+                  {t('sessions.showFewerSessions', { defaultValue: 'Show less' })}
+                </>
+              )}
+            </Button>
+          )}
+
+          {/* Fetching the next page only makes sense once everything already
+              fetched is on screen. */}
+          {!isFolded && hasMoreSessions && (
             <Button
               variant="ghost"
               size="sm"

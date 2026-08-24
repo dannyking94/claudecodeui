@@ -111,8 +111,8 @@
     "send": "送信",
     "stop": "停止",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enterで送信 • Shift+Enterで改行 • Tabでモード切替 • / でスラッシュコマンド",
-      "enter": "Enterで送信 • Shift+Enterで改行 • Tabでモード切替 • / でスラッシュコマンド"
+      "ctrlEnter": "Ctrl+Enterで送信 • Shift+Enterで改行 • Tabでモード切替",
+      "enter": "Enterで送信 • Shift+Enterで改行 • Tabでモード切替"
     },
     "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
     "showAllCommands": "すべてのコマンドを表示",
