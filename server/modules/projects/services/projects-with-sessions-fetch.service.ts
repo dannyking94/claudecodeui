@@ -13,12 +13,24 @@ type SessionSummary = {
   summary: string;
   messageCount: number;
   lastActivity: string;
+  /**
+   * App session id of the session that spawned this one, or null when the row
+   * is top-level *or* its recorded parent no longer resolves (deleted or
+   * archived). Collapsing the unresolvable case to null is what makes an
+   * orphaned child render as an ordinary sidebar row instead of vanishing.
+   */
+  parentSessionId: string | null;
+  /** Parent title, so a child can be labelled when it is not nested under it. */
+  parentSummary: string | null;
+  /** Repository the parent lives in; differs from this row's project for cross-repo children. */
+  parentProjectPath: string | null;
 };
 
 type SessionRepositoryRow = {
   provider: string;
   session_id: string;
   custom_name?: string | null;
+  parent_session_id?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
 };
@@ -117,21 +129,38 @@ function normalizeSessionPagination(options: SessionPaginationOptions = {}): { l
   };
 }
 
-function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
-  return {
-    id: row.session_id,
-    provider: row.provider,
-    summary: row.custom_name || '',
-    messageCount: 0,
-    lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
-  };
+/**
+ * Maps a page of session rows, resolving every recorded parent in one query.
+ *
+ * Done per page rather than per row so a project with twenty nested sessions
+ * still costs a single extra lookup.
+ */
+function mapSessionRowsToSummaries(rows: SessionRepositoryRow[]): SessionSummary[] {
+  const parentRefs = sessionsDb.getParentSessionRefs(
+    rows.map((row) => row.parent_session_id ?? '').filter(Boolean),
+  );
+
+  return rows.map((row) => {
+    const parent = row.parent_session_id ? parentRefs.get(row.parent_session_id) ?? null : null;
+
+    return {
+      id: row.session_id,
+      provider: row.provider,
+      summary: row.custom_name || '',
+      messageCount: 0,
+      lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+      parentSessionId: parent?.sessionId ?? null,
+      parentSummary: parent?.summary ?? null,
+      parentProjectPath: parent?.projectPath ?? null,
+    };
+  });
 }
 
 function readProjectSessionsIncludingArchived(projectPath: string): ProjectSessionsPageResult {
   const rows = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath) as SessionRepositoryRow[];
 
   return {
-    sessions: rows.map(mapSessionRowToSummary),
+    sessions: mapSessionRowsToSummaries(rows),
     total: rows.length,
     hasMore: false,
   };
@@ -153,7 +182,7 @@ function readProjectSessionsPageByPath(
   const total = sessionsDb.countSessionsByProjectPath(projectPath);
 
   return {
-    sessions: rows.map(mapSessionRowToSummary),
+    sessions: mapSessionRowsToSummaries(rows),
     total,
     hasMore: pagination.offset + rows.length < total,
   };

@@ -90,6 +90,53 @@ function resolveProjectDisplayName(
 }
 
 /**
+ * Resolves a caller-supplied session id (app-facing or provider-native) to its
+ * row, or fails with the shared 404.
+ *
+ * Session nesting is set by external tooling that often only holds the
+ * provider-native id, so both lookups are accepted here for the same reason
+ * `getSessionDetailsById` accepts them.
+ */
+function resolveSessionRowOrThrow(sessionId: string) {
+  const session =
+    sessionsDb.getSessionById(sessionId) ?? sessionsDb.getSessionByProviderSessionId(sessionId);
+  if (!session) {
+    throw new AppError(`Session "${sessionId}" was not found.`, {
+      code: 'SESSION_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+
+  return session;
+}
+
+/**
+ * Rejects a parent assignment that would close a loop in the session tree.
+ *
+ * Walks the candidate parent's own ancestor chain; reaching the child means
+ * the child already sits above the parent. The visited set also stops a chain
+ * that is already cyclic (rows written directly into the database bypass this
+ * check entirely) from spinning forever.
+ */
+function assertParentIntroducesNoCycle(sessionId: string, parentSessionId: string): void {
+  const visited = new Set<string>([sessionId]);
+  let ancestorId: string | null = parentSessionId;
+
+  while (ancestorId) {
+    if (visited.has(ancestorId)) {
+      throw new AppError('That parent would create a session cycle.', {
+        code: 'SESSION_PARENT_CYCLE',
+        statusCode: 400,
+      });
+    }
+
+    visited.add(ancestorId);
+    const ancestor = sessionsDb.getSessionById(ancestorId);
+    ancestorId = ancestor?.parent_session_id ?? null;
+  }
+}
+
+/**
  * Application service for provider-backed session message operations.
  *
  * Callers pass a provider id and this service resolves the concrete provider
@@ -406,5 +453,43 @@ export const sessionsService = {
 
     sessionsDb.updateSessionCustomName(sessionId, summary);
     return { sessionId, summary };
+  },
+
+  /**
+   * Nests one session under another, or unnests it when `parentSessionId` is
+   * null.
+   *
+   * Both ids may be given as app-facing or provider-native ids; the stored
+   * value is always normalized to the parent's app session id so the sidebar
+   * can match it against the ids it already renders.
+   *
+   * Parent and child may live in different projects — that is the common case
+   * for a session that spawns work in another repository — so no project check
+   * is applied here. Only self-parenting and cycles are rejected, because those
+   * are the two shapes the sidebar cannot render as a tree.
+   */
+  setSessionParentById(
+    sessionId: string,
+    parentSessionId: string | null,
+  ): { sessionId: string; parentSessionId: string | null } {
+    const session = resolveSessionRowOrThrow(sessionId);
+
+    if (!parentSessionId) {
+      sessionsDb.updateSessionParentSessionId(session.session_id, null);
+      return { sessionId: session.session_id, parentSessionId: null };
+    }
+
+    const parent = resolveSessionRowOrThrow(parentSessionId);
+    if (parent.session_id === session.session_id) {
+      throw new AppError('A session cannot be its own parent.', {
+        code: 'SESSION_PARENT_CYCLE',
+        statusCode: 400,
+      });
+    }
+
+    assertParentIntroducesNoCycle(session.session_id, parent.session_id);
+
+    sessionsDb.updateSessionParentSessionId(session.session_id, parent.session_id);
+    return { sessionId: session.session_id, parentSessionId: parent.session_id };
   },
 };

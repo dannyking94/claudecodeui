@@ -324,6 +324,48 @@ const parseSessionRenameSummary = (payload: unknown): string => {
   return summary;
 };
 
+/**
+ * Reads `{ parentSessionId }` off a nesting request.
+ *
+ * `null` (or an empty string) is a meaningful value here — it unnests the
+ * session — so it is accepted rather than rejected as a missing field.
+ */
+const parseSessionParentPayload = (payload: unknown): string | null => {
+  if (!payload || typeof payload !== 'object') {
+    throw new AppError('Request body must be an object.', {
+      code: 'INVALID_REQUEST_BODY',
+      statusCode: 400,
+    });
+  }
+
+  const body = payload as Record<string, unknown>;
+  const rawParentSessionId = body.parentSessionId;
+  if (rawParentSessionId === null || rawParentSessionId === undefined) {
+    return null;
+  }
+
+  if (typeof rawParentSessionId !== 'string') {
+    throw new AppError('parentSessionId must be a string or null.', {
+      code: 'INVALID_SESSION_PARENT',
+      statusCode: 400,
+    });
+  }
+
+  const parentSessionId = rawParentSessionId.trim();
+  if (!parentSessionId) {
+    return null;
+  }
+
+  if (!SESSION_ID_PATTERN.test(parentSessionId)) {
+    throw new AppError('Invalid parentSessionId.', {
+      code: 'INVALID_SESSION_PARENT',
+      statusCode: 400,
+    });
+  }
+
+  return parentSessionId;
+};
+
 const parseSessionSearchQuery = (value: unknown): string => {
   const query = readOptionalQueryString(value) ?? '';
   if (query.length < 2) {
@@ -636,6 +678,23 @@ router.put(
     const sessionId = parseSessionId(req.params.sessionId);
     const summary = parseSessionRenameSummary(req.body);
     const result = sessionsService.renameSessionById(sessionId, summary);
+    res.json(createApiSuccessResponse(result));
+  }),
+);
+
+/**
+ * Nests one session under another (or unnests it with a null parent).
+ *
+ * The same link can be written straight into `sessions.parent_session_id` by a
+ * process that spawns a session without an API key; this route is the
+ * authenticated equivalent and additionally rejects cycles.
+ */
+router.put(
+  '/sessions/:sessionId/parent',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const parentSessionId = parseSessionParentPayload(req.body);
+    const result = sessionsService.setSessionParentById(sessionId, parentSessionId);
     res.json(createApiSuccessResponse(result));
   }),
 );

@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- id mid-run, or equals \`session_id\` for sessions discovered on disk.
     provider_session_id TEXT,
     custom_name TEXT,
+    -- App session id (\`sessions.session_id\`) of the session that spawned this
+    -- one; NULL for a top-level session. Deliberately *not* a foreign key: the
+    -- sidebar must keep rendering a child whose parent row was archived or
+    -- deleted (it degrades to a top-level row), and the external process that
+    -- writes this column directly must never be rejected because the parent is
+    -- not indexed yet.
+    parent_session_id TEXT,
     project_path TEXT,
     jsonl_path TEXT,
     -- Model this session runs with. Written when the user picks a model for the

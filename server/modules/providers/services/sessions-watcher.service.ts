@@ -146,6 +146,13 @@ async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Prom
     ? project.custom_project_name
     : await generateDisplayName(path.basename(projectPath ?? '') || (projectPath ?? ''), projectPath);
 
+  // The delta has to carry the same parent fields as the paginated sidebar
+  // payload; a live upsert that omitted them would merge over the loaded row
+  // and drop the session out of its parent's subtree until the next refetch.
+  const parent = row.parent_session_id
+    ? sessionsDb.getParentSessionRefs([row.parent_session_id]).get(row.parent_session_id) ?? null
+    : null;
+
   return JSON.stringify({
     kind: 'session_upserted',
     sessionId: row.session_id,
@@ -155,6 +162,9 @@ async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Prom
       summary: row.custom_name || '',
       messageCount: 0,
       lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+      parentSessionId: parent?.sessionId ?? null,
+      parentSummary: parent?.summary ?? null,
+      parentProjectPath: parent?.projectPath ?? null,
     },
     project: project
       ? {

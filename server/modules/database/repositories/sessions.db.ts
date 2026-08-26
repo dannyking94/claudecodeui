@@ -1,11 +1,18 @@
 import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
+import type { SessionParentRef } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionRow = {
   session_id: string;
   provider: string;
   provider_session_id: string | null;
+  /**
+   * App session id of the session that spawned this one; NULL for a top-level
+   * session. Written by the sessions API and, for externally spawned worker
+   * sessions, directly into the column by the spawning process.
+   */
+  parent_session_id: string | null;
   project_path: string | null;
   jsonl_path: string | null;
   custom_name: string | null;
@@ -17,7 +24,7 @@ type SessionRow = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, parent_session_id, project_path, jsonl_path, custom_name, model, isArchived, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -68,6 +75,12 @@ export const sessionsDb = {
    * `provider_session_id` so a session that was first created by the app
    * (with an app-allocated `session_id`) is updated in place once its
    * transcript shows up on disk, instead of producing a duplicate row.
+   *
+   * `parent_session_id` is deliberately absent from every write below. Nothing
+   * on disk describes session nesting, so a rescan has no value to contribute
+   * and must leave whatever the sessions API — or an external spawner writing
+   * the column directly — recorded. Adding it to either statement would flatten
+   * the sidebar tree on the next synchronizer pass.
    */
   createSession(
     providerSessionId: string,
@@ -172,9 +185,9 @@ export const sessionsDb = {
    *
    * If the filesystem watcher indexed the provider transcript before this
    * mapping was recorded (a duplicate row keyed by the provider id exists),
-   * the duplicate is merged into the app row: its transcript path and name
-   * are adopted and the duplicate row is removed. Runs in a transaction so
-   * the sidebar can never observe both rows at once.
+   * the duplicate is merged into the app row: its transcript path, name and
+   * parent link are adopted and the duplicate row is removed. Runs in a
+   * transaction so the sidebar can never observe both rows at once.
    */
   assignProviderSessionId(sessionId: string, providerSessionId: string): void {
     const db = getConnection();
@@ -196,9 +209,16 @@ export const sessionsDb = {
              provider_session_id = ?,
              jsonl_path = COALESCE(jsonl_path, ?),
              custom_name = COALESCE(custom_name, ?),
+             parent_session_id = COALESCE(parent_session_id, ?),
              updated_at = CURRENT_TIMESTAMP
            WHERE session_id = ?`
-        ).run(providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId);
+        ).run(
+          providerSessionId,
+          duplicate.jsonl_path,
+          duplicate.custom_name,
+          duplicate.parent_session_id,
+          sessionId,
+        );
         return;
       }
 
@@ -227,6 +247,77 @@ export const sessionsDb = {
        SET model = ?
        WHERE session_id = ?`
     ).run(model, sessionId);
+  },
+
+  /**
+   * Records (or clears, with `null`) the session this one is nested under.
+   *
+   * The caller is responsible for passing a canonical app session id and for
+   * rejecting cycles; the column itself is unconstrained on purpose so an
+   * external spawner can write it without the app running.
+   */
+  updateSessionParentSessionId(sessionId: string, parentSessionId: string | null): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions
+       SET parent_session_id = ?
+       WHERE session_id = ?`
+    ).run(parentSessionId, sessionId);
+  },
+
+  /**
+   * Resolves a batch of `parent_session_id` values to the rows they point at.
+   *
+   * One query for a whole sidebar page instead of a lookup per row. Both id
+   * columns are matched because the column is also written by outside
+   * processes that may only know the provider-native id of the parent, and
+   * the returned `sessionId` is always the canonical app-facing id.
+   *
+   * Archived parents resolve to nothing, exactly like deleted ones: a child
+   * whose parent left the active sidebar has to fall back to a top-level row
+   * rather than reference a session the user cannot see.
+   */
+  getParentSessionRefs(parentSessionIds: string[]): Map<string, SessionParentRef> {
+    const refsByRequestedId = new Map<string, SessionParentRef>();
+    const uniqueIds = [...new Set(parentSessionIds.filter((id) => Boolean(id)))];
+    if (uniqueIds.length === 0) {
+      return refsByRequestedId;
+    }
+
+    const db = getConnection();
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    const rows = db
+      .prepare(
+        `SELECT session_id, provider_session_id, custom_name, project_path
+         FROM sessions
+         WHERE isArchived = 0
+           AND (session_id IN (${placeholders}) OR provider_session_id IN (${placeholders}))`
+      )
+      .all(...uniqueIds, ...uniqueIds) as Array<{
+        session_id: string;
+        provider_session_id: string | null;
+        custom_name: string | null;
+        project_path: string | null;
+      }>;
+
+    for (const requestedId of uniqueIds) {
+      // Prefer an app-id match so a row whose provider id collides with another
+      // row's app id can never shadow the row the caller actually meant.
+      const row =
+        rows.find((candidate) => candidate.session_id === requestedId)
+        ?? rows.find((candidate) => candidate.provider_session_id === requestedId);
+      if (!row) {
+        continue;
+      }
+
+      refsByRequestedId.set(requestedId, {
+        sessionId: row.session_id,
+        summary: row.custom_name ?? '',
+        projectPath: row.project_path,
+      });
+    }
+
+    return refsByRequestedId;
   },
 
   updateSessionCustomName(sessionId: string, customName: string): void {

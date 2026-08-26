@@ -651,6 +651,27 @@ export type WorkspacePathValidationResult = {
 };
 
 // ---------------------------
+//----------------- SESSION PERSISTENCE TYPES ------------
+/**
+ * Resolved parent of a nested session, as returned by
+ * `sessionsDb.getParentSessionRefs`.
+ *
+ * Produced by the database module and consumed by both the projects module
+ * (sidebar payloads) and the providers module (watcher deltas), so the two
+ * read paths describe a parent the same way.
+ *
+ * `sessionId` is always the canonical app-facing session id even when the
+ * stored `parent_session_id` held a provider-native id. A parent that is
+ * missing or archived is never resolved at all: the child must degrade to a
+ * plain top-level row instead of pointing at a session nobody can open.
+ */
+export type SessionParentRef = {
+  sessionId: string;
+  summary: string;
+  projectPath: string | null;
+};
+
+// ---------------------------
 //----------------- GIT WORKTREE MANAGEMENT ------------
 /**
  * Captured output of one completed `git` invocation.
