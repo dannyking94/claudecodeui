@@ -22,6 +22,7 @@ import {
   readProjectSortOrder,
   sortProjects,
 } from '../utils/utils';
+import { buildSessionTree } from '../utils/sessionTree';
 
 type SnippetHighlight = {
   start: number;
@@ -522,7 +523,13 @@ export function useSidebarController({
     [resolveProjectStarState],
   );
 
-  const getProjectSessions = useCallback((project: Project) => getAllSessions(project), []);
+  // Rows are handed to the list already tree-ordered, so nesting costs the
+  // renderers nothing. `buildSessionTree` never drops or adds a session, so the
+  // other consumers of this callback (session counts, id lookups) are unaffected.
+  const getProjectSessions = useCallback(
+    (project: Project) => buildSessionTree(getAllSessions(project)),
+    [],
+  );
 
   const loadMoreSessionsForProject = useCallback(async (projectId: string) => {
     if (!onLoadMoreSessions) {

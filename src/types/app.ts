@@ -41,6 +41,16 @@ export interface ProjectSession {
   // Tags the session with the owning project's DB `projectId` so UI handlers
   // (session switching, sidebar focus, etc.) can match against selectedProject.
   __projectId?: string;
+  // App session id of the session that spawned this one, or null for a
+  // top-level session. The backend already collapses a parent it cannot
+  // resolve (deleted or archived) to null, so a value here always names a
+  // session that exists — though not necessarily one this client has loaded.
+  parentSessionId?: string | null;
+  // Parent title and repository, used to label a child that is shown outside
+  // its parent's subtree (the parent lives in another project, or has not been
+  // paged in yet).
+  parentSummary?: string | null;
+  parentProjectPath?: string | null;
   [key: string]: unknown;
 }
 

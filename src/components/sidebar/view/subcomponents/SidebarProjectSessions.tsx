@@ -6,6 +6,7 @@ import { Button } from '../../../../shared/view/ui';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
+import { countSessionSubtreeRows } from '../../utils/sessionTree';
 
 import SidebarSessionItem from './SidebarSessionItem';
 
@@ -45,6 +46,25 @@ type SidebarProjectSessionsProps = {
  * still covering the "jump back to what I was just doing" case.
  */
 const VISIBLE_SESSION_LIMIT = 3;
+
+/**
+ * Index just past the first `VISIBLE_SESSION_LIMIT` top-level sessions.
+ *
+ * Each one is counted together with its whole subtree, so the fold never cuts
+ * between a parent and the children indented under it — and a project whose
+ * top rows spawned workers still shows three conversations, not three rows.
+ */
+const findFoldCutIndex = (sessions: SessionWithProvider[]): number => {
+  let cutIndex = 0;
+  let topLevelCount = 0;
+
+  while (cutIndex < sessions.length && topLevelCount < VISIBLE_SESSION_LIMIT) {
+    cutIndex += countSessionSubtreeRows(sessions, cutIndex);
+    topLevelCount += 1;
+  }
+
+  return cutIndex;
+};
 
 function SessionListSkeleton() {
   return (
@@ -95,22 +115,26 @@ export default function SidebarProjectSessions({
   }
 
   const hasSessions = sessions.length > 0;
-  const isFoldable = sessions.length > VISIBLE_SESSION_LIMIT;
+  const foldCutIndex = findFoldCutIndex(sessions);
+  const isFoldable = foldCutIndex < sessions.length;
   const isFolded = isFoldable && !isShowingAllSessions;
 
   // A selection past the cut would otherwise disappear the moment it is opened,
   // so the fold keeps the current session pinned below the first three rows
-  // rather than hiding where the user actually is.
+  // rather than hiding where the user actually is. It is pinned flat: shown
+  // apart from its subtree, indentation would only read as a child of whatever
+  // row the fold happened to end on.
   const selectedIndex = selectedSession
     ? sessions.findIndex((session) => session.id === selectedSession.id)
     : -1;
   const visibleSessions = !isFolded
     ? sessions
-    : selectedIndex >= VISIBLE_SESSION_LIMIT
-      ? [...sessions.slice(0, VISIBLE_SESSION_LIMIT), sessions[selectedIndex]]
-      : sessions.slice(0, VISIBLE_SESSION_LIMIT);
+    : selectedIndex >= foldCutIndex
+      ? [...sessions.slice(0, foldCutIndex), { ...sessions[selectedIndex], __depth: 0 }]
+      : sessions.slice(0, foldCutIndex);
 
-  const foldedSessions = sessions.filter((session) => !visibleSessions.includes(session));
+  const visibleSessionIds = new Set(visibleSessions.map((session) => session.id));
+  const foldedSessions = sessions.filter((session) => !visibleSessionIds.has(session.id));
   // Folding must not swallow the green/amber dots: a session that is running or
   // waiting on the user still reports itself through the toggle.
   const foldedLiveCount = foldedSessions.filter(

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Edit2, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Check, Copy, CornerDownRight, Edit2, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu, Badge, Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants } from '../../../../shared/view/ui';
@@ -8,6 +8,7 @@ import type { Project, ProjectSession, LLMProvider } from '../../../../types/app
 import { api } from '../../../../utils/api';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import type { SessionWithProvider } from '../../types/types';
+import { MAX_SESSION_TREE_DEPTH } from '../../utils/sessionTree';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
@@ -72,6 +73,46 @@ const PROVIDER_LABELS: Record<LLMProvider, string> = {
 
 type CopyState = 'loading' | 'idle' | 'copying' | 'copied' | 'error';
 
+/** Horizontal offset added per nesting level of the session tree. */
+const NESTED_SESSION_INDENT_PX = 14;
+
+/**
+ * Last path segment of a project path, used to say which repository a parent
+ * session lives in. Splits on both separators so a Windows path reads the same
+ * as a POSIX one.
+ */
+const readProjectFolderName = (projectPath: string): string =>
+  projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath;
+
+/**
+ * Label for a child that is rendered outside its parent's subtree, or null
+ * when the row needs no label.
+ *
+ * A child is shown flat whenever its parent is not in the same project list:
+ * usually because the parent lives in another repository, sometimes because it
+ * has not been paged in yet. Rather than move the row into the parent's
+ * project — which would misreport the repository the session actually runs in
+ * — the row stays put and names the session that spawned it.
+ */
+const resolveParentSessionLabel = (
+  session: SessionWithProvider,
+  project: Project,
+  t: TFunction,
+): string | null => {
+  if ((session.__depth ?? 0) > 0 || !session.parentSessionId) {
+    return null;
+  }
+
+  const parentName = session.parentSummary?.trim() || t('projects.newSession');
+  const parentProjectPath = session.parentProjectPath?.trim() ?? '';
+  const ownProjectPath = (project.fullPath || project.path || '').trim();
+  if (!parentProjectPath || parentProjectPath === ownProjectPath) {
+    return parentName;
+  }
+
+  return `${parentName} · ${readProjectFolderName(parentProjectPath)}`;
+};
+
 export default function SidebarSessionItem({
   project,
   session,
@@ -102,6 +143,11 @@ export default function SidebarSessionItem({
   const showAttentionIndicator = needsAttention && !isSelected;
   const showRecentIndicator = !showAttentionIndicator && !isProcessing && sessionView.isActive;
   const providerLabel = PROVIDER_LABELS[session.__provider];
+  const nestingDepth = Math.min(Math.max(Math.trunc(session.__depth ?? 0), 0), MAX_SESSION_TREE_DEPTH);
+  const parentSessionLabel = resolveParentSessionLabel(session, project, t);
+  const parentSessionTooltip = parentSessionLabel
+    ? t('sessions.spawnedBy', { parent: parentSessionLabel, defaultValue: 'Spawned by {{parent}}' })
+    : undefined;
 
   // While editing, dismiss only when the user clicks outside the inline rename panel
   // (matches Escape / cancel-button behaviour).
@@ -209,7 +255,18 @@ export default function SidebarSessionItem({
         : `Copy ${providerLabel} session ID`;
 
   return (
-    <div className="group relative">
+    <div
+      className="group relative"
+      style={nestingDepth > 0 ? { marginLeft: nestingDepth * NESTED_SESSION_INDENT_PX } : undefined}
+    >
+      {/* Tree line drawn in the indent gutter, clear of the status dot at left-0. */}
+      {nestingDepth > 0 && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -left-2 top-0 h-full w-px bg-border"
+        />
+      )}
+
       {(showAttentionIndicator || showRecentIndicator) && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <Tooltip
@@ -270,11 +327,20 @@ export default function SidebarSessionItem({
                   <span className="ml-auto flex-shrink-0 text-[11px] text-muted-foreground">{compactSessionAge}</span>
                 )}
               </div>
-              <div className="mt-0.5 flex items-center">
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                 {sessionView.messageCount > 0 && (
                   <Badge variant="secondary" className="px-1 py-0 text-xs">
                     {sessionView.messageCount}
                   </Badge>
+                )}
+                {parentSessionLabel && (
+                  <span
+                    className="flex min-w-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+                    title={parentSessionTooltip}
+                  >
+                    <CornerDownRight className="h-2.5 w-2.5 flex-shrink-0" />
+                    <span className="truncate">{parentSessionLabel}</span>
+                  </span>
                 )}
               </div>
             </div>
@@ -427,8 +493,17 @@ export default function SidebarSessionItem({
                   </span>
                 )}
               </div>
-              <div className="mt-0.5 flex items-center">
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                 {sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>}
+                {parentSessionLabel && (
+                  <span
+                    className="flex min-w-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+                    title={parentSessionTooltip}
+                  >
+                    <CornerDownRight className="h-2.5 w-2.5 flex-shrink-0" />
+                    <span className="truncate">{parentSessionLabel}</span>
+                  </span>
+                )}
               </div>
             </div>
           </div>

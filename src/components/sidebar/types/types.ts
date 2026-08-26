@@ -7,6 +7,9 @@ export type ArchivedProjectListItem = Project & { isArchived: true };
 
 export type SessionWithProvider = ProjectSession & {
   __provider: LLMProvider;
+  // Nesting level in the sidebar's session tree; 0 for a top-level row.
+  // Recomputed on every render by `buildSessionTree`, never persisted.
+  __depth?: number;
 };
 
 export type ArchivedSessionListItem = {
