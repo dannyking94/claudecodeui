@@ -34,7 +34,8 @@
     "loading": "Loading...",
     "showMore": "Show more sessions",
     "showAllSessions": "Show {{hidden}} more",
-    "showFewerSessions": "Show less"
+    "showFewerSessions": "Show less",
+    "spawnedBy": "Spawned by {{parent}}"
   },
   "tooltips": {
     "viewEnvironments": "View Environments",

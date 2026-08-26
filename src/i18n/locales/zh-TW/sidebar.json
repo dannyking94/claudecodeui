@@ -34,7 +34,8 @@
     "loading": "載入中...",
     "showMore": "顯示更多工作階段",
     "showAllSessions": "顯示另外 {{hidden}} 個",
-    "showFewerSessions": "收合"
+    "showFewerSessions": "收合",
+    "spawnedBy": "由 {{parent}} 啟動"
   },
   "tooltips": {
     "viewEnvironments": "查看環境",

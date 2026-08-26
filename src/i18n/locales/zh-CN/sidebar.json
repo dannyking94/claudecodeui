@@ -34,7 +34,8 @@
     "loading": "加载中...",
     "showMore": "显示更多会话",
     "showAllSessions": "显示另外 {{hidden}} 个",
-    "showFewerSessions": "收起"
+    "showFewerSessions": "收起",
+    "spawnedBy": "由 {{parent}} 启动"
   },
   "tooltips": {
     "viewEnvironments": "查看环境",

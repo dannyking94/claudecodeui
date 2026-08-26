@@ -34,7 +34,8 @@
     "loading": "Yükleniyor...",
     "showMore": "Daha fazla oturum göster",
     "showAllSessions": "{{hidden}} tane daha göster",
-    "showFewerSessions": "Daha az göster"
+    "showFewerSessions": "Daha az göster",
+    "spawnedBy": "{{parent}} tarafından başlatıldı"
   },
   "tooltips": {
     "viewEnvironments": "Ortamları Görüntüle",

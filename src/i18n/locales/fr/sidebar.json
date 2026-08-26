@@ -34,7 +34,8 @@
     "loading": "Chargement...",
     "showMore": "Afficher plus de sessions",
     "showAllSessions": "Afficher {{hidden}} de plus",
-    "showFewerSessions": "Afficher moins"
+    "showFewerSessions": "Afficher moins",
+    "spawnedBy": "Lancée par {{parent}}"
   },
   "tooltips": {
     "viewEnvironments": "Voir les environnements",

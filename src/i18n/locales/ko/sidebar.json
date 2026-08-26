@@ -34,7 +34,8 @@
     "loading": "로딩 중...",
     "showMore": "더 많은 세션 보기",
     "showAllSessions": "{{hidden}}개 더 보기",
-    "showFewerSessions": "간략히 보기"
+    "showFewerSessions": "간략히 보기",
+    "spawnedBy": "{{parent}}에서 시작됨"
   },
   "tooltips": {
     "viewEnvironments": "환경 보기",

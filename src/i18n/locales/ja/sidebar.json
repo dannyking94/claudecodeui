@@ -34,7 +34,8 @@
     "loading": "読み込み中...",
     "showMore": "さらにセッションを表示",
     "showAllSessions": "他 {{hidden}} 件を表示",
-    "showFewerSessions": "折りたたむ"
+    "showFewerSessions": "折りたたむ",
+    "spawnedBy": "{{parent}} から起動"
   },
   "tooltips": {
     "viewEnvironments": "環境を表示",

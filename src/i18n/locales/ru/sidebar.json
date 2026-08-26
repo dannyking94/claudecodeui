@@ -34,7 +34,8 @@
     "loading": "Загрузка...",
     "showMore": "Показать больше сеансов",
     "showAllSessions": "Показать ещё {{hidden}}",
-    "showFewerSessions": "Показать меньше"
+    "showFewerSessions": "Показать меньше",
+    "spawnedBy": "Запущена из {{parent}}"
   },
   "tooltips": {
     "viewEnvironments": "Просмотр окружений",
