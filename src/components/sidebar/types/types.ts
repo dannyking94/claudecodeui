@@ -10,6 +10,12 @@ export type SessionWithProvider = ProjectSession & {
   // Nesting level in the sidebar's session tree; 0 for a top-level row.
   // Recomputed on every render by `buildSessionTree`, never persisted.
   __depth?: number;
+  // Set by `groupSessionsByRootProject` only on a row shown under a parent in
+  // another project: the project the session actually runs in. Rows act on this
+  // project rather than on the group they are rendered under, so opening,
+  // renaming or deleting a moved session still addresses its own repository.
+  // Absent on every row that sits in its own project. Recomputed per render.
+  __ownerProject?: Project;
 };
 
 export type ArchivedSessionListItem = {

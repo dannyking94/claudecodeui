@@ -55,9 +55,23 @@ type SidebarProjectItemProps = {
   t: TFunction;
 };
 
-const getSessionCountDisplay = (project: Project, sessions: SessionWithProvider[]): string => {
-  const total = Number(project.sessionMeta?.total ?? sessions.length);
-  return String(total);
+/**
+ * How many sessions this group actually shows.
+ *
+ * Not the same as the project's own total once session trees cross
+ * repositories: a session spawned elsewhere is rendered under its parent here
+ * and the server never counted it for this project, while one of this project's
+ * own sessions may have moved to its parent's group and left no row behind. The
+ * server total is still the base — it covers sessions this client has not paged
+ * in — corrected by what regrouping moved either way.
+ */
+const countGroupSessions = (project: Project, sessions: SessionWithProvider[]): number => {
+  const adoptedCount = sessions.filter((session) => Boolean(session.__ownerProject)).length;
+  const loadedOwnCount = project.sessions?.length ?? 0;
+  const movedOutCount = Math.max(0, loadedOwnCount - (sessions.length - adoptedCount));
+  const ownTotal = Number(project.sessionMeta?.total ?? loadedOwnCount);
+
+  return Math.max(0, ownTotal - movedOutCount) + adoptedCount;
 };
 
 export default function SidebarProjectItem({
@@ -101,8 +115,8 @@ export default function SidebarProjectItem({
   // after the projectName → projectId migration.
   const isSelected = selectedProject?.projectId === project.projectId;
   const isEditing = editingProject === project.projectId;
-  const totalSessionCount = Number(project.sessionMeta?.total ?? sessions.length);
-  const sessionCountDisplay = getSessionCountDisplay(project, sessions);
+  const totalSessionCount = countGroupSessions(project, sessions);
+  const sessionCountDisplay = String(totalSessionCount);
   const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);

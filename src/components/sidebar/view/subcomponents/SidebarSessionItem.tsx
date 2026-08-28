@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, CornerDownRight, Edit2, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Check, Copy, CornerDownRight, Edit2, Folder, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu, Badge, Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants } from '../../../../shared/view/ui';
@@ -148,6 +148,16 @@ export default function SidebarSessionItem({
   const parentSessionTooltip = parentSessionLabel
     ? t('sessions.spawnedBy', { parent: parentSessionLabel, defaultValue: 'Spawned by {{parent}}' })
     : undefined;
+  // A row nested under a parent from another repository is displayed here but
+  // owned there: opening, renaming and deleting it all address its own project,
+  // and the row names that repository since the group it sits in no longer does.
+  const ownerProject = session.__ownerProject ?? project;
+  const ownerProjectPath = session.__ownerProject
+    ? (ownerProject.fullPath || ownerProject.path || '').trim()
+    : '';
+  const ownerProjectLabel = ownerProjectPath
+    ? readProjectFolderName(ownerProjectPath)
+    : null;
 
   // While editing, dismiss only when the user clicks outside the inline rename panel
   // (matches Escape / cancel-button behaviour).
@@ -170,16 +180,16 @@ export default function SidebarSessionItem({
   // Sessions are owned by a project identified by `projectId` (DB primary key)
   // after the projectName → projectId migration.
   const selectMobileSession = () => {
-    onProjectSelect(project);
-    onSessionSelect(session, project.projectId);
+    onProjectSelect(ownerProject);
+    onSessionSelect(session, ownerProject.projectId);
   };
 
   const saveEditedSession = () => {
-    onSaveEditingSession(project.projectId, session.id, editingSessionName, session.__provider);
+    onSaveEditingSession(ownerProject.projectId, session.id, editingSessionName, session.__provider);
   };
 
   const requestDeleteSession = () => {
-    onDeleteSession(project.projectId, session.id, sessionView.sessionName, session.__provider);
+    onDeleteSession(ownerProject.projectId, session.id, sessionView.sessionName, session.__provider);
   };
 
   const loadProviderSessionId = async () => {
@@ -342,6 +352,15 @@ export default function SidebarSessionItem({
                     <span className="truncate">{parentSessionLabel}</span>
                   </span>
                 )}
+                {ownerProjectLabel && (
+                  <span
+                    className="flex min-w-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+                    title={ownerProjectPath}
+                  >
+                    <Folder className="h-2.5 w-2.5 flex-shrink-0" />
+                    <span className="truncate">{ownerProjectLabel}</span>
+                  </span>
+                )}
               </div>
             </div>
 
@@ -454,7 +473,7 @@ export default function SidebarSessionItem({
           onClick={(event) => {
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault();
-            onSessionSelect(session, project.projectId);
+            onSessionSelect(session, ownerProject.projectId);
           }}
         >
           <div className="flex w-full min-w-0 items-center gap-2">
@@ -502,6 +521,15 @@ export default function SidebarSessionItem({
                   >
                     <CornerDownRight className="h-2.5 w-2.5 flex-shrink-0" />
                     <span className="truncate">{parentSessionLabel}</span>
+                  </span>
+                )}
+                {ownerProjectLabel && (
+                  <span
+                    className="flex min-w-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+                    title={ownerProjectPath}
+                  >
+                    <Folder className="h-2.5 w-2.5 flex-shrink-0" />
+                    <span className="truncate">{ownerProjectLabel}</span>
                   </span>
                 )}
               </div>

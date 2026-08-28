@@ -599,20 +599,28 @@
      anchoring; WebKit has never implemented it, so on iOS/macOS Safari each
      swap visibly jumps the chat mid-scroll — worst right after a page of
      older messages loads, when every one of them is still placeholder-sized.
-     Only enable the optimization where the browser can anchor through it. */
+     Only enable the optimization where the browser can anchor through it.
+
+     Keyed on the engine as well as the feature: Safari 27 ships scroll
+     anchoring, so the @supports guard alone would switch this back on for
+     every iOS browser the moment users update — with a brand-new anchoring
+     implementation that is unproven against these swaps and that the manual
+     settle-time corrections in useChatSessionState were never tested
+     alongside. Exact message heights on WebKit remove the largest source of
+     reflow above the reading line. `.engine-webkit` is set in src/main.jsx. */
   @supports (overflow-anchor: auto) {
-    .chat-message {
+    html:not(.engine-webkit) .chat-message {
       content-visibility: auto;
       contain-intrinsic-size: auto 180px;
     }
 
-    .chat-message.assistant {
+    html:not(.engine-webkit) .chat-message.assistant {
       contain-intrinsic-size: auto 240px;
     }
 
-    .chat-message.user,
-    .chat-message.tool,
-    .chat-message.error {
+    html:not(.engine-webkit) .chat-message.user,
+    html:not(.engine-webkit) .chat-message.tool,
+    html:not(.engine-webkit) .chat-message.error {
       contain-intrinsic-size: auto 96px;
     }
   }

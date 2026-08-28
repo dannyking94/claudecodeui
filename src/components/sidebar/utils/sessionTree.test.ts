@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { Project } from '../../../types/app';
 import type { SessionWithProvider } from '../types/types';
 
-import { buildSessionTree, countSessionSubtreeRows } from './sessionTree';
+import {
+  buildSessionTree,
+  countSessionSubtreeRows,
+  groupSessionsByRootProject,
+  type ProjectSessions,
+} from './sessionTree';
 
 type SessionFixture = {
   id: string;
@@ -61,9 +67,10 @@ test('grandchildren keep nesting deeper', () => {
   ]);
 });
 
-test('a child whose parent lives in another project stays a top-level row', () => {
-  // The normal case for a worker session: the spawning session is indexed
-  // under a different repository, so it is absent from this project's list.
+test('a child whose parent is absent from the list stays a top-level row', () => {
+  // Reached whenever the parent is not in the sessions handed in — either it is
+  // not loaded, or `groupSessionsByRootProject` had no parent row to move this
+  // one towards.
   const tree = buildSessionTree(createSessions([
     { id: 'local-session' },
     {
@@ -158,4 +165,126 @@ test('subtree row counts span a parent and all of its descendants', () => {
 
 test('an empty project produces an empty tree', () => {
   assert.deepEqual(buildSessionTree([]), []);
+});
+
+const createProject = (projectId: string): Project => ({
+  projectId,
+  displayName: projectId,
+  fullPath: `/home/dk/Repo/${projectId}`,
+}) as Project;
+
+const createProjectSessions = (
+  entries: Array<[string, SessionFixture[]]>,
+): ProjectSessions[] => entries.map(([projectId, fixtures]) => ({
+  project: createProject(projectId),
+  sessions: createSessions(fixtures),
+}));
+
+const readGroup = (
+  groups: Map<string, SessionWithProvider[]>,
+  projectId: string,
+): Array<[string, string | null]> => (groups.get(projectId) ?? []).map((session) => [
+  String(session.id),
+  session.__ownerProject?.projectId ?? null,
+]);
+
+test('a session moves to the project of the session that spawned it', () => {
+  // The worker case: a session launched in its own directory, so cloudcli files
+  // it under that directory's project, with the parent link pointing back into
+  // the project it was spawned from.
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['secretary-repo', [{ id: 'secretary' }]],
+    ['worker-repo', [{ id: 'worker', parentSessionId: 'secretary' }]],
+  ]));
+
+  assert.deepEqual(readGroup(groups, 'secretary-repo'), [
+    ['secretary', null],
+    ['worker', 'worker-repo'],
+  ]);
+  // The project it really runs in keeps a row of its own, now empty.
+  assert.deepEqual(readGroup(groups, 'worker-repo'), []);
+  // And the tree the sidebar draws from that group nests it.
+  assert.deepEqual(
+    buildSessionTree(groups.get('secretary-repo') ?? []).map((session) => session.__depth),
+    [0, 1],
+  );
+});
+
+test('a chain of spawns collapses into the project of its root', () => {
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['root-repo', [{ id: 'root' }]],
+    ['middle-repo', [{ id: 'middle', parentSessionId: 'root' }]],
+    ['leaf-repo', [{ id: 'leaf', parentSessionId: 'middle' }]],
+  ]));
+
+  assert.deepEqual(readGroup(groups, 'root-repo'), [
+    ['root', null],
+    ['middle', 'middle-repo'],
+    ['leaf', 'leaf-repo'],
+  ]);
+  assert.deepEqual(readGroup(groups, 'middle-repo'), []);
+  assert.deepEqual(readGroup(groups, 'leaf-repo'), []);
+});
+
+test('a session whose parent is not loaded stays where it is', () => {
+  // Paged out, archived or deleted: moving it would hide it under a parent this
+  // client cannot show, so it keeps its own project and its parent label.
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['worker-repo', [{ id: 'worker', parentSessionId: 'never-loaded' }]],
+  ]));
+
+  assert.deepEqual(readGroup(groups, 'worker-repo'), [['worker', null]]);
+});
+
+test('sessions already in their parent project are left untagged', () => {
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['repo', [{ id: 'parent' }, { id: 'child', parentSessionId: 'parent' }]],
+  ]));
+
+  assert.deepEqual(readGroup(groups, 'repo'), [
+    ['parent', null],
+    ['child', null],
+  ]);
+});
+
+test('a session that points at itself is never moved', () => {
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['repo', [{ id: 'self', parentSessionId: 'self' }]],
+  ]));
+
+  assert.deepEqual(readGroup(groups, 'repo'), [['self', null]]);
+});
+
+test('a cycle across projects settles in one group and keeps every row', () => {
+  // Only reachable when parent links are written straight into the database.
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['repo-a', [{ id: 'a', parentSessionId: 'b' }]],
+    ['repo-b', [{ id: 'b', parentSessionId: 'a' }]],
+  ]));
+
+  const rows = [...groups.values()].flat().map((session) => String(session.id)).sort();
+  assert.deepEqual(rows, ['a', 'b']);
+});
+
+test('every project gets a group, even one whose sessions all moved away', () => {
+  const groups = groupSessionsByRootProject(createProjectSessions([
+    ['parent-repo', [{ id: 'parent' }]],
+    ['worker-repo', [{ id: 'worker', parentSessionId: 'parent' }]],
+    ['empty-repo', []],
+  ]));
+
+  assert.deepEqual([...groups.keys()].sort(), ['empty-repo', 'parent-repo', 'worker-repo']);
+});
+
+test('regrouping never mutates the sessions it was given', () => {
+  const entries = createProjectSessions([
+    ['parent-repo', [{ id: 'parent' }]],
+    ['worker-repo', [{ id: 'worker', parentSessionId: 'parent' }]],
+  ]);
+  const worker = entries[1].sessions[0];
+
+  const groups = groupSessionsByRootProject(entries);
+
+  assert.equal(worker.__ownerProject, undefined);
+  assert.notEqual(groups.get('parent-repo')?.[1], worker);
 });

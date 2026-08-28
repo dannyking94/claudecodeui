@@ -22,7 +22,7 @@ import {
   readProjectSortOrder,
   sortProjects,
 } from '../utils/utils';
-import { buildSessionTree } from '../utils/sessionTree';
+import { buildSessionTree, groupSessionsByRootProject } from '../utils/sessionTree';
 
 type SnippetHighlight = {
   start: number;
@@ -523,12 +523,25 @@ export function useSidebarController({
     [resolveProjectStarState],
   );
 
+  // Regrouped across all loaded projects first, because a session's parent may
+  // live in another repository and the tree is only drawn within one group.
+  // Recomputed only when the project list itself changes.
+  const sessionsByRootProjectId = useMemo(
+    () => groupSessionsByRootProject(
+      projects.map((project) => ({ project, sessions: getAllSessions(project) })),
+    ),
+    [projects],
+  );
+
   // Rows are handed to the list already tree-ordered, so nesting costs the
-  // renderers nothing. `buildSessionTree` never drops or adds a session, so the
-  // other consumers of this callback (session counts, id lookups) are unaffected.
+  // renderers nothing. Regrouping moves a session between projects but never
+  // drops or duplicates one, so the other consumers of this callback (session
+  // counts, id lookups) still see every loaded session exactly once.
   const getProjectSessions = useCallback(
-    (project: Project) => buildSessionTree(getAllSessions(project)),
-    [],
+    (project: Project) => buildSessionTree(
+      sessionsByRootProjectId.get(project.projectId) ?? getAllSessions(project),
+    ),
+    [sessionsByRootProjectId],
   );
 
   const loadMoreSessionsForProject = useCallback(async (projectId: string) => {

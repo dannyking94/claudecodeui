@@ -19,6 +19,8 @@ import {
   type MotionBaseline,
   type ScrollAnchor,
 } from '../utils/scrollAnchor';
+import { getIntrinsicMessageKey } from '../utils/messageKeys';
+import { SCROLL_DEBUG_ENABLED, scrollDebug } from '../utils/scrollDebug';
 
 import { createChatMessageConverter } from './useChatMessages';
 
@@ -40,6 +42,22 @@ const HAS_NATIVE_SCROLL_ANCHORING =
  * during iOS momentum, short enough to feel immediate when you stop to read.
  */
 const SCROLL_SETTLE_MS = 150;
+
+/**
+ * Locate a previously rendered message in the current list.
+ *
+ * Identity first; on a miss, by intrinsic key. `refreshFromServer` — run after
+ * every `complete` and on every reconnect — replaces every server-backed
+ * NormalizedMessage, so the converter (keyed on identity) hands back fresh
+ * ChatMessage objects and an identity-only lookup fails precisely when the
+ * list changed most.
+ */
+function indexOfMessage(list: ChatMessage[], message: ChatMessage | null, key: string | null): number {
+  if (!message) return -1;
+  const byIdentity = list.indexOf(message);
+  if (byIdentity >= 0 || !key) return byIdentity;
+  return list.findIndex((candidate) => getIntrinsicMessageKey(candidate) === key);
+}
 
 interface UseChatSessionStateArgs {
   selectedProject: Project | null;
@@ -221,6 +239,12 @@ export function useChatSessionState({
    * so an index can't distinguish "same window" from "reveal 20 more".
    */
   const renderedFirstMessageRef = useRef<ChatMessage | null>(null);
+  /** Intrinsic key of `renderedFirstMessageRef`; survives the object being replaced by a refresh. */
+  const renderedFirstMessageKeyRef = useRef<string | null>(null);
+  /** Index of the rendered first message in `chatMessagesRef`, as of the last render. */
+  const renderWindowStartRef = useRef(0);
+  /** The derived list as of the last render, for callbacks that size the window against it. */
+  const chatMessagesRef = useRef<ChatMessage[]>([]);
   const renderWindowSessionRef = useRef<string | null>(null);
   /**
    * While a fetched older page waits for scroll-settle, the render window may
@@ -231,6 +255,8 @@ export function useChatSessionState({
    * motion, which reads as being thrown to the top of the chat.
    */
   const pendingPrependGateRef = useRef<ChatMessage | null>(null);
+  /** Intrinsic key of `pendingPrependGateRef`, for the same reason as `renderedFirstMessageKeyRef`. */
+  const pendingPrependGateKeyRef = useRef<string | null>(null);
   /**
    * True only while the per-session initial pin loop is actually running.
    *
@@ -252,8 +278,17 @@ export function useChatSessionState({
    * reset pass in this local chat state domain.
    */
   const previousNewSessionTriggerRef = useRef(newSessionTrigger ?? 0);
+  /** Last `externalMessageUpdate` value acted on; the effect's other deps churn far more often. */
+  const lastExternalMessageUpdateRef = useRef(0);
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
+
+  useEffect(() => {
+    if (!SCROLL_DEBUG_ENABLED) return;
+    const engine = navigator.userAgent.match(/(?:Version|CriOS|Chrome|Firefox|FxiOS)\/[\d.]+/)?.[0] ?? '?';
+    const os = navigator.userAgent.match(/OS (\d+_\d+)/)?.[1] ?? '';
+    scrollDebug('init', { native: HAS_NATIVE_SCROLL_ANCHORING, engine, os });
+  }, []);
 
   useEffect(() => {
     const trigger = newSessionTrigger ?? 0;
@@ -300,6 +335,7 @@ export function useChatSessionState({
     pendingScrollRestoreRef.current = null;
     pendingPrependCommitRef.current = null;
     pendingPrependGateRef.current = null;
+    pendingPrependGateKeyRef.current = null;
     motionBaselineRef.current = null;
     // Clearing the key is what re-arms the initial scroll; the loop owns the
     // pending flag itself, so forcing it true here would only strand it set.
@@ -430,7 +466,15 @@ export function useChatSessionState({
    * observes it; the rAF is the fallback for a write that lands on the current
    * offset and therefore fires no event at all.
    */
-  const setScrollTop = useCallback((container: HTMLDivElement, value: number) => {
+  const setScrollTop = useCallback((container: HTMLDivElement, value: number, reason = 'scroll') => {
+    // 'follow' fires per streaming chunk and would drown the trace.
+    if (SCROLL_DEBUG_ENABLED && reason !== 'follow') {
+      scrollDebug(`write:${reason}`, {
+        from: container.scrollTop,
+        to: value,
+        max: container.scrollHeight - container.clientHeight,
+      });
+    }
     programmaticScrollRef.current = true;
     if (programmaticResetRafRef.current) cancelAnimationFrame(programmaticResetRafRef.current);
     programmaticResetRafRef.current = requestAnimationFrame(() => {
@@ -457,12 +501,16 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return;
     if (!force && userDetachedRef.current) return;
+    // A flick away from the newest message can still be coasting when this
+    // runs; landing a write then yanks the viewport back to the bottom. The
+    // settle pass re-pins it anyway if the user is in fact following.
+    if (!force && !isScrollSettled()) return;
     if (force) {
       userDetachedRef.current = false;
       scrollAnchorRef.current = null;
     }
-    setScrollTop(container, container.scrollHeight);
-  }, [setScrollTop]);
+    setScrollTop(container, container.scrollHeight, force ? 'bottom-forced' : 'bottom');
+  }, [isScrollSettled, setScrollTop]);
 
   const scrollToBottomAndReset = useCallback(() => {
     scrollToBottom(true);
@@ -480,55 +528,89 @@ export function useChatSessionState({
     return isNearBottomOf(container);
   }, []);
 
+  /**
+   * Grow the render window by one page above what is currently rendered.
+   *
+   * Sized against the rendered window, not `visibleMessageCount`: while the
+   * user reads history the window start is held (see visibleMessages), so the
+   * count no longer describes what is on screen, and a count-relative reveal
+   * would uncover everything between the held start and the cap in one
+   * commit. Older history is fetched only once everything already loaded is
+   * on screen — after a `refreshFromServer` the store holds the whole
+   * transcript, and the pages above the window are revealed from it.
+   */
   const loadOlderMessages = useCallback(
     async (container: HTMLDivElement) => {
       if (!container || isLoadingMoreRef.current || isLoadingMoreMessages) return false;
-      // A fetched page is still waiting for the viewport to settle; loading
-      // another would advance the store past the un-revealed one.
+      // A reveal is still waiting for the viewport to settle; starting another
+      // would advance the store past the un-revealed one.
       if (pendingPrependCommitRef.current) return false;
-      if (allMessagesLoadedRef.current) return false;
-      if (!hasMoreMessages || !selectedSession || !selectedProject) return false;
+      if (!selectedSession || !selectedProject) return false;
+
+      const hasHiddenHistory = renderWindowStartRef.current > 0;
+      if (!hasHiddenHistory && (!hasMoreMessages || allMessagesLoadedRef.current)) return false;
 
       isLoadingMoreRef.current = true;
 
       try {
-        const slot = await sessionStore.fetchMore(selectedSession.id, {
-          limit: MESSAGES_PER_PAGE,
-        });
-        if (!slot) return false;
-        if (slot.serverMessages.length === 0) {
-          if (!slot.hasMore) {
-            setHasMoreMessages(false);
-            allMessagesLoadedRef.current = true;
-            setAllMessagesLoaded(true);
-            if (loadAllOverlayTimerRef.current) {
-              clearTimeout(loadAllOverlayTimerRef.current);
-              loadAllOverlayTimerRef.current = null;
+        let page: Awaited<ReturnType<SessionStore['fetchMore']>> | null = null;
+        if (!hasHiddenHistory) {
+          page = await sessionStore.fetchMore(selectedSession.id, {
+            limit: MESSAGES_PER_PAGE,
+          });
+          if (!page) return false;
+          if (page.serverMessages.length === 0) {
+            if (!page.hasMore) {
+              setHasMoreMessages(false);
+              allMessagesLoadedRef.current = true;
+              setAllMessagesLoaded(true);
+              if (loadAllOverlayTimerRef.current) {
+                clearTimeout(loadAllOverlayTimerRef.current);
+                loadAllOverlayTimerRef.current = null;
+              }
+              setShowLoadAllOverlay(false);
             }
-            setShowLoadAllOverlay(false);
+            return false;
           }
-          return false;
         }
+        const fetched = page;
 
         const commitPrepend = () => {
           // Lift the render gate in the same update that captures the anchor,
           // so the page paints and the compensation lands in one commit.
           pendingPrependGateRef.current = null;
+          pendingPrependGateKeyRef.current = null;
           // Capture immediately before the state updates that reveal the page,
           // so the anchor reflects the viewport the user is actually looking at
           // rather than wherever it was when the fetch started.
           pendingScrollRestoreRef.current = captureScrollAnchor(container);
-          setHasMoreMessages(slot.hasMore);
-          setTotalMessages(slot.total);
-          setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
-          if (!slot.hasMore) {
-            allMessagesLoadedRef.current = true;
-            setAllMessagesLoaded(true);
-            if (loadAllOverlayTimerRef.current) {
-              clearTimeout(loadAllOverlayTimerRef.current);
-              loadAllOverlayTimerRef.current = null;
+          // The refs describe the latest render. A page fetched mid-gesture is
+          // already in the store and gated, so the rendered start accounts for
+          // it; a page committed synchronously has not rendered yet, so it does
+          // not. Either way this is exactly one page above the rendered first
+          // message.
+          const revealedCount =
+            chatMessagesRef.current.length - renderWindowStartRef.current + MESSAGES_PER_PAGE;
+          if (SCROLL_DEBUG_ENABLED) {
+            scrollDebug('reveal-commit', {
+              count: revealedCount,
+              fetched: fetched?.serverMessages.length ?? 0,
+              start: renderWindowStartRef.current,
+            });
+          }
+          setVisibleMessageCount(revealedCount);
+          if (fetched) {
+            setHasMoreMessages(fetched.hasMore);
+            setTotalMessages(fetched.total);
+            if (!fetched.hasMore) {
+              allMessagesLoadedRef.current = true;
+              setAllMessagesLoaded(true);
+              if (loadAllOverlayTimerRef.current) {
+                clearTimeout(loadAllOverlayTimerRef.current);
+                loadAllOverlayTimerRef.current = null;
+              }
+              setShowLoadAllOverlay(false);
             }
-            setShowLoadAllOverlay(false);
           }
         };
 
@@ -542,7 +624,9 @@ export function useChatSessionState({
           commitPrepend();
         } else {
           pendingPrependGateRef.current = renderedFirstMessageRef.current;
+          pendingPrependGateKeyRef.current = renderedFirstMessageKeyRef.current;
           pendingPrependCommitRef.current = commitPrepend;
+          if (SCROLL_DEBUG_ENABLED) scrollDebug('reveal-deferred');
         }
         return true;
       } finally {
@@ -614,7 +698,7 @@ export function useChatSessionState({
     if (baseline) {
       const shift = motionShiftAboveViewport(container, baseline);
       if (Math.abs(shift) >= 1) {
-        setScrollTop(container, container.scrollTop + shift);
+        setScrollTop(container, container.scrollTop + shift, 'settle-shift');
       }
     }
 
@@ -635,11 +719,14 @@ export function useChatSessionState({
     const following = distanceFromBottom(container) < REATTACH_WITHIN_PX;
     userDetachedRef.current = !following;
     setIsUserScrolledUp(!following);
+    if (SCROLL_DEBUG_ENABLED) {
+      scrollDebug('settle', { top: container.scrollTop, dist: distanceFromBottom(container), following });
+    }
 
     if (following) {
       // Absorb any growth that arrived while adjustments were suppressed.
       scrollAnchorRef.current = null;
-      setScrollTop(container, container.scrollHeight);
+      setScrollTop(container, container.scrollHeight, 'settle-follow');
     } else {
       scrollAnchorRef.current = captureScrollAnchor(container);
     }
@@ -655,14 +742,31 @@ export function useChatSessionState({
     programmaticScrollRef.current = false;
 
     if (!wasProgrammatic) {
+      const entering = !isScrollingRef.current;
       // Entering motion: snapshot message layout so the shift that content
       // reflow causes above the viewport during this gesture can be undone at
       // settle. Skipped where the engine anchors natively.
-      if (!isScrollingRef.current && !HAS_NATIVE_SCROLL_ANCHORING) {
+      if (entering && !HAS_NATIVE_SCROLL_ANCHORING) {
         motionBaselineRef.current = captureMotionBaseline(container);
+      }
+      if (SCROLL_DEBUG_ENABLED && entering) {
+        scrollDebug('gesture', {
+          top: container.scrollTop,
+          dist: distanceFromBottom(container),
+          touching: isTouchingRef.current,
+        });
       }
       isScrollingRef.current = true;
       lastScrollEventPosRef.current = container.scrollTop;
+      // Every write of ours is tagged, so an untagged event this far from the
+      // newest message is the user moving away — including the momentum
+      // phase of a flick, which touchmove never sees. Without this the latch
+      // stays clear until settle, and anything that appends past the render
+      // cap meanwhile drops the topmost rendered message from under a
+      // viewport that is still coasting.
+      if (distanceFromBottom(container) > DETACH_BELOW_PX) {
+        userDetachedRef.current = true;
+      }
       if (scrollSettleTimerRef.current) clearTimeout(scrollSettleTimerRef.current);
       const settleCheck = () => {
         scrollSettleTimerRef.current = null;
@@ -671,8 +775,10 @@ export function useChatSessionState({
         // moving the viewport between sparse events, and settling mid-flight
         // would capture a stale anchor and then correct against the user's
         // live scroll. If the position moved since the last event, keep
-        // waiting.
-        if (el && el.scrollTop !== lastScrollEventPosRef.current) {
+        // waiting. A finger resting on the screen after stopping a flick is
+        // still a gesture — settling then writes scrollTop under it — and
+        // touchend arms no timer of its own, so keep polling until it lifts.
+        if (el && (el.scrollTop !== lastScrollEventPosRef.current || isTouchingRef.current)) {
           lastScrollEventPosRef.current = el.scrollTop;
           scrollSettleTimerRef.current = setTimeout(settleCheck, SCROLL_SETTLE_MS);
           return;
@@ -682,9 +788,8 @@ export function useChatSessionState({
       scrollSettleTimerRef.current = setTimeout(settleCheck, SCROLL_SETTLE_MS);
     }
 
-    // Only ever *clears* the latch. `scroll` fires for programmatic scrolls
-    // too, and latching on those would strand the user mid-history; setting it
-    // is handleUserScrollIntent's job.
+    // The latch is set only from untagged events above; any scroll, ours
+    // included, that ends within reach of the newest message clears it.
     if (distanceFromBottom(container) < REATTACH_WITHIN_PX) {
       userDetachedRef.current = false;
       scrollAnchorRef.current = null;
@@ -709,7 +814,7 @@ export function useChatSessionState({
       wasNearTopRef.current = false;
     }
 
-    if (!allMessagesLoadedRef.current) {
+    if (!allMessagesLoadedRef.current || renderWindowStartRef.current > 0) {
       if (!scrolledNearTop) { topLoadLockRef.current = false; return; }
       if (topLoadLockRef.current) {
         if (container.scrollTop > 20) topLoadLockRef.current = false;
@@ -726,7 +831,8 @@ export function useChatSessionState({
     if (!anchor || !container) return;
 
     programmaticScrollRef.current = true;
-    if (!restoreScrollAnchor(container, anchor)) {
+    const restored = restoreScrollAnchor(container, anchor);
+    if (!restored) {
       // The anchored element was remounted by the reveal: near the top of the
       // window the topmost visible message usually sits in the first tool
       // group, and revealing older messages moves that group's boundary —
@@ -735,7 +841,15 @@ export function useChatSessionState({
       // exactly the offset that keeps the reading position. Without this
       // fallback the viewport silently kept its old numeric scrollTop — the
       // top of the newly revealed content.
-      setScrollTop(container, anchor.scrollTop + (container.scrollHeight - anchor.scrollHeight));
+      setScrollTop(container, anchor.scrollTop + (container.scrollHeight - anchor.scrollHeight), 'reveal-fallback');
+    }
+    if (SCROLL_DEBUG_ENABLED) {
+      scrollDebug('reveal', {
+        restored,
+        grew: container.scrollHeight - anchor.scrollHeight,
+        top: container.scrollTop,
+        len: chatMessages.length,
+      });
     }
     pendingScrollRestoreRef.current = null;
 
@@ -765,6 +879,7 @@ export function useChatSessionState({
     pendingScrollRestoreRef.current = null;
     pendingPrependCommitRef.current = null;
     pendingPrependGateRef.current = null;
+    pendingPrependGateKeyRef.current = null;
     motionBaselineRef.current = null;
     wasNearTopRef.current = false;
     userDetachedRef.current = false;
@@ -888,11 +1003,19 @@ export function useChatSessionState({
       });
     };
 
-    // Skip if already loaded and fresh
-    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSessionId) && !sessionStore.isStale(selectedSessionId)) {
+    // Same session, effect re-run for another reason — `selectedProject` is
+    // rebuilt on every session_upserted for it, `ws` on every reconnect: only
+    // re-subscribe. The view is live over the socket and `complete` refreshes
+    // the transcript, so staleness means nothing here, and the fall-through
+    // below would replace the loaded history with the newest page — resetting
+    // the render window and throwing a user reading older messages to
+    // wherever the shorter list clamps. Staleness only matters when
+    // *returning* to a session, which changes the key.
+    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSessionId)) {
       subscribeToSelectedSession();
       return;
     }
+    if (SCROLL_DEBUG_ENABLED) scrollDebug('session-load', { session: selectedSessionId.slice(0, 8) });
 
     const sessionChanged = currentSessionId !== null && currentSessionId !== selectedSessionId;
     if (sessionChanged) {
@@ -958,6 +1081,14 @@ export function useChatSessionState({
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
     if (!externalMessageUpdate || !selectedSession || !selectedProject) return;
+    // Once per increment. The other dependencies change identity on every
+    // session_upserted and at every run boundary; re-running for those
+    // replaced every server-backed message object mid-conversation (and
+    // queued a scroll-to-bottom) for nothing. A refresh skipped because a run
+    // is active is covered by the one `complete` triggers.
+    if (lastExternalMessageUpdateRef.current === externalMessageUpdate) return;
+    lastExternalMessageUpdateRef.current = externalMessageUpdate;
+    if (SCROLL_DEBUG_ENABLED) scrollDebug('external-refresh', { processing: isProcessing });
 
     const reloadExternalMessages = async () => {
       try {
@@ -1013,6 +1144,7 @@ export function useChatSessionState({
       // top of it.
       pendingPrependCommitRef.current = null;
       pendingPrependGateRef.current = null;
+      pendingPrependGateKeyRef.current = null;
       if (!allMessagesLoadedRef.current && selectedSession && selectedProject) {
           try {
             // Load all messages into the store for search navigation
@@ -1109,17 +1241,19 @@ export function useChatSessionState({
   }, [selectedSession?.id]);
 
   const visibleMessages = useMemo(() => {
+    chatMessagesRef.current = chatMessages;
     let start = Math.max(0, chatMessages.length - visibleMessageCount);
     if (renderWindowSessionRef.current !== activeSessionId) {
       renderWindowSessionRef.current = activeSessionId;
     } else {
       // An older page fetched mid-gesture stays hidden until the settle-time
       // commit reveals it together with its scroll compensation.
-      const gate = pendingPrependGateRef.current;
-      if (gate) {
-        const gateIndex = chatMessages.indexOf(gate);
-        if (gateIndex > start) start = gateIndex;
-      }
+      const gateIndex = indexOfMessage(
+        chatMessages,
+        pendingPrependGateRef.current,
+        pendingPrependGateKeyRef.current,
+      );
+      if (gateIndex > start) start = gateIndex;
       // While the user reads history the window start never advances: a plain
       // slice(-count) drops the topmost rendered message each time a live
       // message appends past the cap, shifting everything above the reading
@@ -1127,12 +1261,23 @@ export function useChatSessionState({
       // cap re-applies on the first update after the user returns to the
       // bottom. (Revealing more history — a smaller start — is always
       // allowed; that's the page-reveal and load-all path.)
-      if (userDetachedRef.current && renderedFirstMessageRef.current) {
-        const held = chatMessages.indexOf(renderedFirstMessageRef.current);
+      if (userDetachedRef.current) {
+        const held = indexOfMessage(
+          chatMessages,
+          renderedFirstMessageRef.current,
+          renderedFirstMessageKeyRef.current,
+        );
         if (held >= 0 && held < start) start = held;
       }
     }
-    renderedFirstMessageRef.current = chatMessages[start] ?? null;
+    const first = chatMessages[start] ?? null;
+    const firstKey = first ? getIntrinsicMessageKey(first) : null;
+    if (SCROLL_DEBUG_ENABLED && (firstKey !== renderedFirstMessageKeyRef.current || start !== renderWindowStartRef.current)) {
+      scrollDebug('window', { len: chatMessages.length, start, sameFirst: firstKey === renderedFirstMessageKeyRef.current });
+    }
+    renderedFirstMessageRef.current = first;
+    renderedFirstMessageKeyRef.current = firstKey;
+    renderWindowStartRef.current = start;
     return start > 0 ? chatMessages.slice(start) : chatMessages;
   }, [activeSessionId, chatMessages, visibleMessageCount]);
 
@@ -1162,7 +1307,7 @@ export function useChatSessionState({
     if (!isScrollSettled()) return;
 
     if (!userDetachedRef.current) {
-      setScrollTop(container, container.scrollHeight);
+      setScrollTop(container, container.scrollHeight, 'follow');
       return;
     }
 
@@ -1170,11 +1315,17 @@ export function useChatSessionState({
     if (!anchor) return;
 
     programmaticScrollRef.current = true;
+    const before = container.scrollTop;
     if (!restoreScrollAnchor(container, anchor)) {
       // The anchored message was unmounted (rewind, session refresh) — take a
       // fresh anchor rather than letting the viewport drift unmanaged.
       programmaticScrollRef.current = false;
       scrollAnchorRef.current = captureScrollAnchor(container);
+      if (SCROLL_DEBUG_ENABLED) {
+        scrollDebug('anchor-lost', { top: container.scrollTop, height: container.scrollHeight });
+      }
+    } else if (SCROLL_DEBUG_ENABLED && container.scrollTop !== before) {
+      scrollDebug('write:anchor', { from: before, to: container.scrollTop });
     }
   }, [isScrollSettled, setScrollTop]);
 
@@ -1266,6 +1417,7 @@ export function useChatSessionState({
     // scroll-settle.
     pendingPrependCommitRef.current = null;
     pendingPrependGateRef.current = null;
+    pendingPrependGateKeyRef.current = null;
     setIsLoadingAllMessages(true);
     setShowLoadAllOverlay(true);
     if (loadAllOverlayTimerRef.current) {

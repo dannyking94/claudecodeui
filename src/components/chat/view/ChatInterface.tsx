@@ -11,10 +11,12 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { SCROLL_DEBUG_ENABLED } from '../utils/scrollDebug';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 import CommandResultModal from './subcomponents/CommandResultModal';
+import ScrollDebugOverlay from './subcomponents/ScrollDebugOverlay';
 
 function ChatInterface({
   selectedProject,
@@ -487,6 +489,7 @@ function ChatInterface({
         currentSessionId={currentSessionId || selectedSession?.id || null}
         onSelectProviderModel={selectProviderModel}
       />
+      {SCROLL_DEBUG_ENABLED && <ScrollDebugOverlay />}
     </PermissionContext.Provider>
   );
 }
