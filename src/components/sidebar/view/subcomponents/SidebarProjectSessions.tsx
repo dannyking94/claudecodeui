@@ -13,6 +13,7 @@ import {
   foldChildSessions,
   type SessionTreeRow,
 } from '../../utils/sessionTree';
+import { RECENT_ACTIVITY_WINDOW_MS } from '../../utils/utils';
 
 import SidebarSessionItem from './SidebarSessionItem';
 
@@ -75,6 +76,46 @@ const findFoldCutIndex = (rows: SessionTreeRow[]): number => {
 /** Matches the indentation `SidebarSessionItem` gives a row at the same depth. */
 const readRowIndentPx = (depth: number): number =>
   Math.min(Math.max(Math.trunc(depth), 0), MAX_SESSION_TREE_DEPTH) * NESTED_SESSION_INDENT_PX;
+
+/**
+ * Dots on a fold toggle, standing in for the sessions it is holding: amber for
+ * anything blocked on the user, green for anything still running. Both can show
+ * at once, and they are kept apart because they ask different things — one
+ * needs the user to answer a prompt, the other needs nothing at all.
+ */
+function FoldedSessionIndicators({
+  foldedLiveCount,
+  foldedWaitingCount,
+  t,
+}: {
+  foldedLiveCount: number;
+  foldedWaitingCount: number;
+  t: TFunction;
+}) {
+  const attentionLabel = t('tooltips.attentionRequiredIndicator', {
+    defaultValue: 'Session needs attention',
+  });
+  const runningCount = Math.max(foldedLiveCount - foldedWaitingCount, 0);
+
+  return (
+    <>
+      {foldedWaitingCount > 0 && (
+        <span
+          role="status"
+          className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
+          aria-label={attentionLabel}
+        />
+      )}
+      {runningCount > 0 && (
+        <span
+          role="status"
+          className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"
+          aria-label={t('tooltips.activeSessionIndicator')}
+        />
+      )}
+    </>
+  );
+}
 
 function SessionListSkeleton() {
   return (
@@ -143,8 +184,18 @@ export default function SidebarProjectSessions({
   const rows = foldChildSessions(sessions, {
     expandedParentIds,
     liveSessionIds,
+    // Blocked on a permission dialog or a question: not streaming, and quiet on
+    // disk, so it has to be named separately or the fold would read it as at
+    // rest and take away the one row the user has to act on.
+    waitingSessionIds: attentionSessionIds,
     // The session on screen keeps its row even once siblings overtake it.
     pinnedSessionIds: selectedSession ? new Set([String(selectedSession.id)]) : undefined,
+    // The same window the row's own green dot is drawn from, so a child folds
+    // only once it has stopped claiming to be recently active. `currentTime`
+    // ticks every minute, which is also how a child that has gone quiet
+    // eventually folds; one that comes back does not wait for the tick, since
+    // its new activity arrives as a session update and re-renders this list.
+    activeSince: currentTime.getTime() - RECENT_ACTIVITY_WINDOW_MS,
   });
 
   const foldCutIndex = findFoldCutIndex(rows);
@@ -188,6 +239,16 @@ export default function SidebarProjectSessions({
       row.kind === 'session'
         ? (liveSessionIds.has(row.session.id) ? 1 : 0)
         : row.foldedLiveCount
+    ),
+    0,
+  );
+  // And a session stopped at a permission dialog is reported as blocked rather
+  // than merely live, because the two ask different things of the user.
+  const foldedWaitingCount = foldedRows.reduce(
+    (total, row) => total + (
+      row.kind === 'session'
+        ? (attentionSessionIds.has(row.session.id) ? 1 : 0)
+        : row.foldedWaitingCount
     ),
     0,
   );
@@ -271,12 +332,11 @@ export default function SidebarProjectSessions({
                       hidden: row.foldedCount,
                       defaultValue: 'Show {{hidden}} more',
                     })}
-                    {row.foldedLiveCount > 0 && (
-                      <span
-                        className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"
-                        aria-label={t('tooltips.activeSessionIndicator')}
-                      />
-                    )}
+                    <FoldedSessionIndicators
+                      foldedLiveCount={row.foldedLiveCount}
+                      foldedWaitingCount={row.foldedWaitingCount}
+                      t={t}
+                    />
                   </>
                 ) : (
                   <>
@@ -303,12 +363,11 @@ export default function SidebarProjectSessions({
                     hidden: foldedSessionCount,
                     defaultValue: 'Show {{hidden}} more',
                   })}
-                  {foldedLiveCount > 0 && (
-                    <span
-                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"
-                      aria-label={t('tooltips.activeSessionIndicator')}
-                    />
-                  )}
+                  <FoldedSessionIndicators
+                    foldedLiveCount={foldedLiveCount}
+                    foldedWaitingCount={foldedWaitingCount}
+                    t={t}
+                  />
                 </>
               ) : (
                 <>

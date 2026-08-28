@@ -19,6 +19,11 @@ export const NESTED_SESSION_INDENT_PX = 14;
  * Three mirrors the fold the sidebar already applies to top-level sessions, and
  * keeps one busy parent — an agent that spawned a dozen workers — from burying
  * every other conversation in the project.
+ *
+ * The cap counts rows that are actually drawn. A child folded away for being at
+ * rest never occupies one of these slots, so the cap only bites when more than
+ * three children are working at once, and both kinds of folded child are
+ * reported by the same single toggle.
  */
 export const MAX_VISIBLE_CHILD_SESSIONS = 3;
 
@@ -334,6 +339,13 @@ export type SessionTreeRow =
       foldedCount: number;
       /** How many of those are running or waiting on the user. */
       foldedLiveCount: number;
+      /**
+       * How many of those are blocked on the user — a subset of
+       * `foldedLiveCount`. A session stopped at a permission dialog is the one
+       * row the user most needs to reach, so a toggle holding one has to say
+       * so rather than counting it as an ordinary hidden session.
+       */
+      foldedWaitingCount: number;
     };
 
 export type FoldChildSessionsOptions = {
@@ -341,35 +353,82 @@ export type FoldChildSessionsOptions = {
   expandedParentIds?: ReadonlySet<string>;
   /** Sessions running, or waiting on the user. */
   liveSessionIds?: ReadonlySet<string>;
+  /**
+   * Sessions blocked on the user — a permission prompt, a question. Normally
+   * also in `liveSessionIds`, but merged in here regardless, so that a session
+   * stopped at a dialog can never fold away quietly because a caller listed it
+   * in only one of the two sets.
+   *
+   * It is named apart from the running sessions because it is not streaming and
+   * would otherwise read as quiet: it takes a capped slot ahead of a merely
+   * running sibling, and a toggle that ends up holding one has to report it.
+   */
+  waitingSessionIds?: ReadonlySet<string>;
   /** Sessions that stay on screen whatever their activity — the open one. */
   pinnedSessionIds?: ReadonlySet<string>;
+  /**
+   * Timestamp from which recorded activity still counts as working, normally
+   * `now - RECENT_ACTIVITY_WINDOW_MS`.
+   *
+   * Left undefined, every child renders and only the cap folds anything —
+   * without a clock to measure against there is no recency to read.
+   */
+  activeSince?: number;
   /** Defaults to `MAX_VISIBLE_CHILD_SESSIONS`. */
   visibleChildLimit?: number;
 };
 
 /**
- * Caps how many children each parent renders, folding the rest behind a toggle
- * row placed at the end of that parent's visible children.
+ * Renders the children that are working and folds the rest behind a single
+ * toggle row placed at the end of that parent's visible children.
  *
- * This is a display limit, applied to the flattened tree on its way to the
- * renderer rather than inside `buildSessionTree`: everything else reading the
- * tree — session counts, id lookups, the project-level fold — still sees every
- * loaded session, and nothing here can make a row unreachable.
+ * Resting is the default: a child earns its row by showing a signal the sidebar
+ * actually observed, never by failing to prove it has finished. There is no
+ * "done" here to key on — a session that completes its task does not exit, it
+ * sits at its prompt looking exactly like one that is thinking — so the rule is
+ * turned around and every visible row is positive evidence of work:
  *
- * Which children survive the cap is decided in this order:
+ * - **Running.** The session is in cloudcli's run registry: a turn is in flight
+ *   right now. The strongest signal there is, and the only one that means
+ *   "streaming this second".
+ * - **Waiting on the user.** Stopped at a permission dialog or a question. It
+ *   is not streaming and its transcript may not have moved for an hour, but it
+ *   is the row the user most needs to reach, so it counts as working.
+ * - **Recently active.** Its transcript was written to within the window the
+ *   caller passes as `activeSince`. This is what covers a session cloudcli did
+ *   not launch — a worker driven from a terminal is never in the run registry,
+ *   but the file watcher syncs its `lastActivity` within seconds of every
+ *   message it writes.
+ * - **Open.** Not evidence of work, but folding the row the user is reading
+ *   would be its own bug.
+ *
+ * A branch is judged as a whole: a quiet parent holding a working grandchild
+ * renders, because the working row cannot be drawn without it.
+ *
+ * Nothing is hidden. Everything folded is counted on the toggle, which reports
+ * separately when it is holding something running or blocked, and folding is
+ * recomputed from the sessions handed in each time — so a child that goes quiet
+ * folds, and one that writes a message, starts a turn or hits a permission
+ * prompt is on screen again at the next render, with no state to invalidate.
+ *
+ * The cap is applied after that filter, to the working children only:
  *
  * 1. A branch holding a pinned session — the one the user has open — always
  *    renders, so opening a session can never be what makes it vanish once a
  *    sibling overtakes it. It claims a slot rather than adding a row.
- * 2. Branches holding a live session take the remaining slots ahead of idle
- *    ones, so a worker running right now cannot lose its place to an idle
- *    sibling. When more branches are live than there are slots, the most
- *    recently active of them render and the toggle reports the rest as live.
+ * 2. Branches blocked on the user come next, then merely running ones: when
+ *    there are more working children than slots, the ones that need the user to
+ *    act outrank the ones that need nothing from them.
  * 3. The rest fill up in tree order, which `buildSessionTree` already left
  *    sorted by activity.
  *
  * The survivors are rendered back in tree order, so the rows still read most
  * recently active first beside their age badges.
+ *
+ * This is a display filter, applied to the flattened tree on its way to the
+ * renderer rather than inside `buildSessionTree`: everything else reading the
+ * tree — session counts, id lookups, the project-level fold — still sees every
+ * loaded session, and nothing here can make a row unreachable.
  *
  * A row's parent is read from the depths in the flattened list — the nearest
  * row above it one level shallower — which keeps this in step with what is
@@ -380,11 +439,20 @@ export const foldChildSessions = (
   options: FoldChildSessionsOptions = {},
 ): SessionTreeRow[] => {
   const {
+    activeSince,
     expandedParentIds,
     liveSessionIds,
+    waitingSessionIds,
     pinnedSessionIds,
     visibleChildLimit = MAX_VISIBLE_CHILD_SESSIONS,
   } = options;
+
+  // Everything that is running or blocked, whichever set the caller put it in.
+  const liveOrWaitingSessionIds = !waitingSessionIds?.size
+    ? liveSessionIds
+    : !liveSessionIds?.size
+      ? waitingSessionIds
+      : new Set([...liveSessionIds, ...waitingSessionIds]);
 
   const depths = orderedSessions.map((session) => Math.max(Math.trunc(session.__depth ?? 0), 0));
 
@@ -440,21 +508,58 @@ export const foldChildSessions = (
     return matches;
   };
 
-  const selectVisibleChildIndexes = (childIndexes: number[]): number[] => {
-    if (childIndexes.length <= visibleChildLimit) {
-      return childIndexes;
+  /**
+   * The freshest activity anywhere in a branch. Read across the whole subtree
+   * so a quiet parent is kept on screen by a child that is still writing —
+   * otherwise the working row would have nothing to hang from.
+   */
+  const readBranchActivityTime = (index: number): number => {
+    let latestActivityTime = 0;
+    for (let cursor = index; cursor < subtreeEndIndexes[index]; cursor += 1) {
+      latestActivityTime = Math.max(latestActivityTime, readActivityTime(orderedSessions[cursor]));
     }
 
-    const pinnedIndexes = childIndexes.filter((index) => countInSubtree(index, pinnedSessionIds) > 0);
-    const otherIndexes = childIndexes.filter((index) => !pinnedIndexes.includes(index));
-    const liveFirstIndexes = [
-      ...otherIndexes.filter((index) => countInSubtree(index, liveSessionIds) > 0),
-      ...otherIndexes.filter((index) => countInSubtree(index, liveSessionIds) === 0),
+    return latestActivityTime;
+  };
+
+  /**
+   * Whether a branch has shown any of the signals that earn a row. Every one of
+   * them is something observed — a run in the registry, a prompt waiting on the
+   * user, a message written, the session being open — never an inference that
+   * the work behind a quiet session is over.
+   */
+  const isWorkingBranch = (index: number): boolean => {
+    if (
+      countInSubtree(index, pinnedSessionIds) > 0
+      || countInSubtree(index, liveOrWaitingSessionIds) > 0
+    ) {
+      return true;
+    }
+
+    // No clock to measure against: fall back to rendering every child, capped,
+    // rather than folding on a recency nobody supplied.
+    return activeSince === undefined || readBranchActivityTime(index) >= activeSince;
+  };
+
+  const selectVisibleChildIndexes = (childIndexes: number[]): number[] => {
+    const workingIndexes = childIndexes.filter(isWorkingBranch);
+    if (workingIndexes.length <= visibleChildLimit) {
+      return workingIndexes;
+    }
+
+    const pinnedIndexes = workingIndexes.filter((index) => countInSubtree(index, pinnedSessionIds) > 0);
+    const otherIndexes = workingIndexes.filter((index) => !pinnedIndexes.includes(index));
+    const isWaiting = (index: number) => countInSubtree(index, waitingSessionIds) > 0;
+    const isLive = (index: number) => countInSubtree(index, liveOrWaitingSessionIds) > 0;
+    const priorityIndexes = [
+      ...otherIndexes.filter((index) => isWaiting(index)),
+      ...otherIndexes.filter((index) => !isWaiting(index) && isLive(index)),
+      ...otherIndexes.filter((index) => !isWaiting(index) && !isLive(index)),
     ];
     const freeSlotCount = Math.max(visibleChildLimit, pinnedIndexes.length) - pinnedIndexes.length;
     const visibleIndexes = new Set([
       ...pinnedIndexes,
-      ...liveFirstIndexes.slice(0, Math.max(freeSlotCount, 0)),
+      ...priorityIndexes.slice(0, Math.max(freeSlotCount, 0)),
     ]);
 
     return childIndexes.filter((index) => visibleIndexes.has(index));
@@ -472,7 +577,11 @@ export const foldChildSessions = (
 
     const parentSessionId = readSessionId(orderedSessions[index]);
     const isExpanded = expandedParentIds?.has(parentSessionId) ?? false;
-    const visibleChildIndexes = isExpanded ? childIndexes : selectVisibleChildIndexes(childIndexes);
+    const selectedChildIndexes = selectVisibleChildIndexes(childIndexes);
+    // Expanding is sticky for as long as the sidebar keeps the parent in its
+    // set: nothing re-folds under someone who is reading it, not a child going
+    // quiet, not the clock passing the recency window.
+    const visibleChildIndexes = isExpanded ? childIndexes : selectedChildIndexes;
 
     for (const childIndex of visibleChildIndexes) {
       emitSubtree(childIndex);
@@ -483,7 +592,7 @@ export const foldChildSessions = (
     );
     // An expanded parent keeps its toggle with nothing behind it, otherwise
     // there would be no way to fold the children back up.
-    const isFoldable = childIndexes.length > visibleChildLimit;
+    const isFoldable = selectedChildIndexes.length < childIndexes.length;
     if (foldedChildIndexes.length === 0 && !(isExpanded && isFoldable)) {
       return;
     }
@@ -497,7 +606,11 @@ export const foldChildSessions = (
         0,
       ),
       foldedLiveCount: foldedChildIndexes.reduce(
-        (total, childIndex) => total + countInSubtree(childIndex, liveSessionIds),
+        (total, childIndex) => total + countInSubtree(childIndex, liveOrWaitingSessionIds),
+        0,
+      ),
+      foldedWaitingCount: foldedChildIndexes.reduce(
+        (total, childIndex) => total + countInSubtree(childIndex, waitingSessionIds),
         0,
       ),
     });

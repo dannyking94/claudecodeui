@@ -12,6 +12,7 @@ import {
   type ProjectSessions,
   type SessionTreeRow,
 } from './sessionTree';
+import { RECENT_ACTIVITY_WINDOW_MS } from './utils';
 
 type SessionFixture = {
   id: string;
@@ -560,4 +561,283 @@ test('sessions with no children are left alone', () => {
 
   assert.deepEqual(readRows(rows), [['alone', 0]]);
   assert.deepEqual(foldChildSessions([]), []);
+});
+
+/**
+ * The cutoff the sidebar passes when it folds children that are at rest: the
+ * same ten minutes the row's own "recently active" dot is drawn from, so a
+ * child folds only once it has stopped claiming to be recently active.
+ */
+const ACTIVE_SINCE = Date.parse('2026-08-28T12:00:00.000Z') - RECENT_ACTIVITY_WINDOW_MS;
+
+/** A parent whose children were last active the given number of minutes ago. */
+const createAgedFamily = (
+  childAgesInMinutes: readonly number[],
+  extra: SessionFixture[] = [],
+): SessionWithProvider[] => buildSessionTree(createSessions([
+  { id: 'parent', lastActivity: minutesAgo(1) },
+  ...childAgesInMinutes.map((minutes, index) => ({
+    id: `child-${index + 1}`,
+    parentSessionId: 'parent',
+    lastActivity: minutesAgo(minutes),
+  })),
+  ...extra,
+]));
+
+test('children that have gone quiet fold away and the working ones stay on screen', () => {
+  // The sidebar the owner watches: two workers still writing, two that reported
+  // and went quiet. Resting is the default, so only the working pair renders.
+  const rows = foldChildSessions(createAgedFamily([2, 4, 40, 300]), {
+    activeSince: ACTIVE_SINCE,
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['fold:2', 1],
+  ]);
+  // Folded, not hidden: the toggle says how many it is holding, and holds
+  // nothing that is running or blocked.
+  const toggle = rows[3];
+  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedLiveCount, 0);
+  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedWaitingCount, 0);
+});
+
+test('a running child never folds, however old its last message is', () => {
+  // The dangerous case: a worker mid-turn writes nothing to its transcript
+  // while it thinks, so its timestamp keeps ageing. A run in flight outranks
+  // any clock.
+  const rows = foldChildSessions(createAgedFamily([2, 600]), {
+    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-2']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+  ]);
+});
+
+test('a child blocked on the user stays on screen although nothing is streaming', () => {
+  // Stopped at a permission dialog: not running, transcript untouched for five
+  // hours, and the one row the user has to reach. It must not fold.
+  const rows = foldChildSessions(createAgedFamily([2, 300]), {
+    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-2']),
+    waitingSessionIds: new Set(['child-2']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+  ]);
+});
+
+test('a blocked child takes a capped slot ahead of one that is merely running', () => {
+  // More working children than slots. What needs the user to answer outranks
+  // what needs nothing from them, whatever the activity order says.
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5]), {
+    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-5']),
+    waitingSessionIds: new Set(['child-5']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-5', 1],
+    ['fold:2', 1],
+  ]);
+});
+
+test('a toggle that ends up holding a blocked child says so', () => {
+  // Four children waiting on the user, three slots: the one the cap folds is
+  // still reported, so the row can put the amber dot on the toggle instead of
+  // burying it.
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4]), {
+    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-4']),
+    waitingSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-4']),
+  });
+
+  const toggle = rows[4];
+  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedCount, 1);
+  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedWaitingCount, 1);
+  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedLiveCount, 1);
+});
+
+test('a resting child never takes a capped slot from a working one', () => {
+  // `stale-runner` is the oldest child by activity but is running right now,
+  // and the two quiet ones sort above it. Resting children are filtered out
+  // before the cap counts, so both working children render and neither quiet
+  // one costs a slot.
+  const rows = foldChildSessions(buildSessionTree(createSessions([
+    { id: 'parent', lastActivity: minutesAgo(1) },
+    { id: 'fresh', parentSessionId: 'parent', lastActivity: minutesAgo(1) },
+    { id: 'quiet-a', parentSessionId: 'parent', lastActivity: minutesAgo(60) },
+    { id: 'quiet-b', parentSessionId: 'parent', lastActivity: minutesAgo(70) },
+    { id: 'stale-runner', parentSessionId: 'parent', lastActivity: minutesAgo(600) },
+  ])), {
+    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['stale-runner']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['fresh', 1],
+    ['stale-runner', 1],
+    ['fold:2', 1],
+  ]);
+});
+
+test('both kinds of folded child are counted by the same single toggle', () => {
+  // Five working children and two at rest: one toggle, one count, so the cap
+  // and the resting fold cannot disagree about what is off screen.
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5, 90, 900]), {
+    activeSince: ACTIVE_SINCE,
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+    ['fold:4', 1],
+  ]);
+  assert.equal(rows.filter((row) => row.kind === 'foldedChildren').length, 1);
+});
+
+test('the open session keeps its row after it goes quiet', () => {
+  const rows = foldChildSessions(createAgedFamily([2, 900]), {
+    activeSince: ACTIVE_SINCE,
+    pinnedSessionIds: new Set(['child-2']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+  ]);
+});
+
+test('a quiet child stays on screen for the grandchild still working under it', () => {
+  // The working row cannot be drawn without the branch it hangs from.
+  const rows = foldChildSessions(createAgedFamily([2, 400], [
+    { id: 'busy-grandchild', parentSessionId: 'child-2', lastActivity: minutesAgo(1) },
+  ]), {
+    activeSince: ACTIVE_SINCE,
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['busy-grandchild', 2],
+  ]);
+});
+
+test('a folded child unfolds itself as soon as it writes again', () => {
+  // A worker given more work after it reported must not stay buried because it
+  // was quiet once. Nothing is remembered between calls, so the next render
+  // with a fresh timestamp brings it straight back.
+  const quiet = foldChildSessions(createAgedFamily([2, 300]), { activeSince: ACTIVE_SINCE });
+  assert.deepEqual(readRows(quiet), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['fold:1', 1],
+  ]);
+
+  const writingAgain = foldChildSessions(createAgedFamily([2, 0]), { activeSince: ACTIVE_SINCE });
+  assert.deepEqual(readRows(writingAgain), [
+    ['parent', 0],
+    ['child-2', 1],
+    ['child-1', 1],
+  ]);
+});
+
+test('a folded child unfolds itself as soon as it starts running', () => {
+  const rows = foldChildSessions(createAgedFamily([2, 300]), {
+    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-2']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+  ]);
+});
+
+test('an expanded parent survives a re-render that replaces every session object', () => {
+  // The sidebar rebuilds its rows from scratch on every websocket refresh. The
+  // expansion is held by parent id, so a user reading the folded children is
+  // never re-folded under by a refresh, a child going quiet, or the clock.
+  const expandedParentIds = new Set(['parent']);
+  const expected: Array<[string, number]> = [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+    ['fold:0', 1],
+  ];
+
+  const firstRender = foldChildSessions(createAgedFamily([2, 200, 900]), {
+    activeSince: ACTIVE_SINCE,
+    expandedParentIds,
+  });
+  assert.deepEqual(readRows(firstRender), expected);
+
+  // Fresh session objects, same ids — and the first child has now gone quiet.
+  const secondRender = foldChildSessions(createAgedFamily([30, 200, 900]), {
+    activeSince: ACTIVE_SINCE,
+    expandedParentIds,
+  });
+  assert.deepEqual(readRows(secondRender), expected);
+});
+
+test('an expanded parent whose children are all at rest keeps a toggle to fold them back', () => {
+  const rows = foldChildSessions(createAgedFamily([100, 200]), {
+    activeSince: ACTIVE_SINCE,
+    expandedParentIds: new Set(['parent']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['fold:0', 1],
+  ]);
+});
+
+test('with no cutoff supplied nothing folds for being quiet', () => {
+  // Recency is only judged against a clock the caller passes; without one the
+  // cap is the only thing that folds anything.
+  assert.deepEqual(readRows(foldChildSessions(createAgedFamily([100, 200, 900]))), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+  ]);
+});
+
+test('a blocked child listed only as waiting is still never folded', () => {
+  // The guarantee has to hold on the util's own terms: a caller that names a
+  // session as blocked without also putting it in the running set must not lose
+  // that row, and the toggle above it must still count it as live.
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 400]), {
+    activeSince: ACTIVE_SINCE,
+    waitingSessionIds: new Set(['child-4']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-4', 1],
+    ['fold:1', 1],
+  ]);
 });
