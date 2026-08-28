@@ -424,9 +424,10 @@ test('a folded child takes its own descendants with it, and the count says so', 
   ]);
 });
 
-test('a running child keeps its slot ahead of an idle sibling', () => {
-  // The oldest child by activity, but it is working right now: an idle sibling
-  // is what gets folded, never it.
+test('a running child renders beside its three idle siblings, not instead of one', () => {
+  // The oldest child by activity, and working right now. It used to take the
+  // third slot off an idle sibling; it is now drawn outside the cap, so all
+  // four render — still in activity order, so the rows read newest-first.
   const rows = foldChildSessions(createFamily(4), {
     liveSessionIds: new Set(['child-4']),
   });
@@ -435,13 +436,14 @@ test('a running child keeps its slot ahead of an idle sibling', () => {
     ['parent', 0],
     ['child-1', 1],
     ['child-2', 1],
-    // Kept in activity order, so the rows still read newest-first.
+    ['child-3', 1],
     ['child-4', 1],
-    ['fold:1', 1],
   ]);
 });
 
-test('a branch with a running grandchild keeps its slot too', () => {
+test('a branch that is live only through a grandchild overflows the cap too', () => {
+  // `child-4` is quiet itself; the work is one level down. The cap reads the
+  // branch, so the pair renders outside it just like a running child would.
   const rows = foldChildSessions(createFamily(4, [
     { id: 'busy-grandchild', parentSessionId: 'child-4', lastActivity: minutesAgo(45) },
   ]), {
@@ -452,13 +454,15 @@ test('a branch with a running grandchild keeps its slot too', () => {
     ['parent', 0],
     ['child-1', 1],
     ['child-2', 1],
+    ['child-3', 1],
     ['child-4', 1],
     ['busy-grandchild', 2],
-    ['fold:1', 1],
   ]);
 });
 
-test('when every child is live the most recent ones show and the toggle reports the rest', () => {
+test('when every child is live every one of them shows, cap or no cap', () => {
+  // The rule the owner asked for: show all the ones that are running. Five
+  // working children are five rows, and there is nothing left to fold.
   const rows = foldChildSessions(createFamily(5), {
     liveSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-4', 'child-5']),
   });
@@ -468,12 +472,9 @@ test('when every child is live the most recent ones show and the toggle reports 
     ['child-1', 1],
     ['child-2', 1],
     ['child-3', 1],
-    ['fold:2', 1],
+    ['child-4', 1],
+    ['child-5', 1],
   ]);
-  // Nothing running is folded away silently: the toggle carries the live count
-  // that puts the pulsing dot on it.
-  const toggle = rows[4];
-  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedLiveCount, 2);
 });
 
 test('the open session is never the row a fold takes away', () => {
@@ -597,11 +598,6 @@ test('children that have gone quiet fold away and the working ones stay on scree
     ['child-2', 1],
     ['fold:2', 1],
   ]);
-  // Folded, not hidden: the toggle says how many it is holding, and holds
-  // nothing that is running or blocked.
-  const toggle = rows[3];
-  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedLiveCount, 0);
-  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedWaitingCount, 0);
 });
 
 test('a running child never folds, however old its last message is', () => {
@@ -636,38 +632,54 @@ test('a child blocked on the user stays on screen although nothing is streaming'
   ]);
 });
 
-test('a blocked child takes a capped slot ahead of one that is merely running', () => {
-  // More working children than slots. What needs the user to answer outranks
-  // what needs nothing from them, whatever the activity order says.
-  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5]), {
+test('blocked and running children all render, and the cap still holds the idle ones', () => {
+  // The two budgets side by side. Five children are running or blocked and
+  // four more are on screen only for being recent: every live one is drawn,
+  // and the three slots left over go to the recent ones by activity. Blocked
+  // no longer has to outrank merely running — neither can lose a row.
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5, 6, 7, 8, 9]), {
     activeSince: ACTIVE_SINCE,
-    liveSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-5']),
-    waitingSessionIds: new Set(['child-5']),
+    liveSessionIds: new Set(['child-1', 'child-3', 'child-5', 'child-7', 'child-9']),
+    waitingSessionIds: new Set(['child-9']),
   });
 
   assert.deepEqual(readRows(rows), [
     ['parent', 0],
     ['child-1', 1],
     ['child-2', 1],
+    ['child-3', 1],
+    ['child-4', 1],
     ['child-5', 1],
-    ['fold:2', 1],
+    ['child-6', 1],
+    ['child-7', 1],
+    ['child-9', 1],
+    ['fold:1', 1],
   ]);
 });
 
-test('a toggle that ends up holding a blocked child says so', () => {
-  // Four children waiting on the user, three slots: the one the cap folds is
-  // still reported, so the row can put the amber dot on the toggle instead of
-  // burying it.
-  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4]), {
+test('no child toggle is ever left holding a live session', () => {
+  // Why the toggle carries a count and no dots. Nine recent children, five of
+  // them running or blocked, and one more at rest: between them the cap and
+  // the resting fold take three rows off screen, and not one is live.
+  const liveSessionIds = new Set(['child-1', 'child-3', 'child-5', 'child-7', 'child-9']);
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5, 6, 7, 8, 9, 600]), {
     activeSince: ACTIVE_SINCE,
-    liveSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-4']),
-    waitingSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-4']),
+    liveSessionIds,
+    waitingSessionIds: new Set(['child-9']),
   });
 
-  const toggle = rows[4];
-  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedCount, 1);
-  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedWaitingCount, 1);
-  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedLiveCount, 1);
+  const renderedIds = new Set(
+    rows.flatMap((row) => (row.kind === 'session' ? [String(row.session.id)] : [])),
+  );
+  const foldedIds = Array.from({ length: 10 }, (_, index) => `child-${index + 1}`)
+    .filter((id) => !renderedIds.has(id));
+
+  assert.deepEqual(foldedIds, ['child-8', 'child-10']);
+  assert.ok(foldedIds.every((id) => !liveSessionIds.has(id)));
+  // And one toggle stands for all of it, so the count on it is the whole story.
+  const toggles = rows.filter((row) => row.kind === 'foldedChildren');
+  assert.equal(toggles.length, 1);
+  assert.equal(toggles[0].kind === 'foldedChildren' && toggles[0].foldedCount, 2);
 });
 
 test('a resting child never takes a capped slot from a working one', () => {
@@ -827,7 +839,8 @@ test('with no cutoff supplied nothing folds for being quiet', () => {
 test('a blocked child listed only as waiting is still never folded', () => {
   // The guarantee has to hold on the util's own terms: a caller that names a
   // session as blocked without also putting it in the running set must not lose
-  // that row, and the toggle above it must still count it as live.
+  // that row — and, now that being live means overflowing the cap rather than
+  // winning a slot, must not cost a recent sibling one either.
   const rows = foldChildSessions(createAgedFamily([1, 2, 3, 400]), {
     activeSince: ACTIVE_SINCE,
     waitingSessionIds: new Set(['child-4']),
@@ -837,7 +850,7 @@ test('a blocked child listed only as waiting is still never folded', () => {
     ['parent', 0],
     ['child-1', 1],
     ['child-2', 1],
+    ['child-3', 1],
     ['child-4', 1],
-    ['fold:1', 1],
   ]);
 });

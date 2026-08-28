@@ -14,16 +14,19 @@ export const MAX_SESSION_TREE_DEPTH = 4;
 export const NESTED_SESSION_INDENT_PX = 14;
 
 /**
- * Children rendered under one parent before the rest fold behind a toggle.
+ * Idle children rendered under one parent before the rest fold behind a toggle.
  *
  * Three mirrors the fold the sidebar already applies to top-level sessions, and
  * keeps one busy parent — an agent that spawned a dozen workers — from burying
  * every other conversation in the project.
  *
- * The cap counts rows that are actually drawn. A child folded away for being at
- * rest never occupies one of these slots, so the cap only bites when more than
- * three children are working at once, and both kinds of folded child are
- * reported by the same single toggle.
+ * It governs the idle rows only. A child that is running or blocked on the user
+ * is always drawn, however many such siblings there are: a cap that hides one of
+ * them hides exactly the work this sidebar exists to show. What the three slots
+ * are shared out among is the children on screen only for having been written
+ * to recently. A child folded away for being at rest costs nothing either, so
+ * all three slots stay for those, and the cap now bites only when more than
+ * three quiet-but-recent siblings are on screen at once.
  */
 export const MAX_VISIBLE_CHILD_SESSIONS = 3;
 
@@ -335,17 +338,16 @@ export type SessionTreeRow =
        * Sessions currently folded away under this parent, descendants of a
        * folded child included. Zero while the parent is expanded, which is how
        * the toggle knows to offer folding them back up.
+       *
+       * A plain count is the whole of what a child toggle reports, because
+       * everything behind one is quiet by construction: a branch that is
+       * running or blocked on the user is never folded here. The live and
+       * blocked counts this row used to carry went with the rule that could
+       * produce them — they could only ever have read zero. The sidebar's
+       * project-level fold is a different control, it can still take a working
+       * row off screen, and it keeps its dots.
        */
       foldedCount: number;
-      /** How many of those are running or waiting on the user. */
-      foldedLiveCount: number;
-      /**
-       * How many of those are blocked on the user — a subset of
-       * `foldedLiveCount`. A session stopped at a permission dialog is the one
-       * row the user most needs to reach, so a toggle holding one has to say
-       * so rather than counting it as an ordinary hidden session.
-       */
-      foldedWaitingCount: number;
     };
 
 export type FoldChildSessionsOptions = {
@@ -360,8 +362,9 @@ export type FoldChildSessionsOptions = {
    * in only one of the two sets.
    *
    * It is named apart from the running sessions because it is not streaming and
-   * would otherwise read as quiet: it takes a capped slot ahead of a merely
-   * running sibling, and a toggle that ends up holding one has to report it.
+   * would otherwise read as quiet. Both sets now buy the same thing — a row the
+   * cap cannot take away — so the two no longer have to be ranked against each
+   * other when there are more working children than slots.
    */
   waitingSessionIds?: ReadonlySet<string>;
   /** Sessions that stay on screen whatever their activity — the open one. */
@@ -405,25 +408,34 @@ export type FoldChildSessionsOptions = {
  * A branch is judged as a whole: a quiet parent holding a working grandchild
  * renders, because the working row cannot be drawn without it.
  *
- * Nothing is hidden. Everything folded is counted on the toggle, which reports
- * separately when it is holding something running or blocked, and folding is
+ * Nothing is hidden. Everything folded is counted on the toggle, and folding is
  * recomputed from the sessions handed in each time — so a child that goes quiet
  * folds, and one that writes a message, starts a turn or hits a permission
  * prompt is on screen again at the next render, with no state to invalidate.
  *
- * The cap is applied after that filter, to the working children only:
+ * The cap is applied after that filter, and only to what is left once the live
+ * branches have been set aside:
  *
- * 1. A branch holding a pinned session — the one the user has open — always
- *    renders, so opening a session can never be what makes it vanish once a
- *    sibling overtakes it. It claims a slot rather than adding a row.
- * 2. Branches blocked on the user come next, then merely running ones: when
- *    there are more working children than slots, the ones that need the user to
- *    act outrank the ones that need nothing from them.
- * 3. The rest fill up in tree order, which `buildSessionTree` already left
- *    sorted by activity.
+ * 1. A branch that is running or blocked on the user renders whatever the cap
+ *    says, and there is no limit on how many of them do. The cap is there to
+ *    stop one parent's dozen workers burying the rest of the project, not to
+ *    choose between the workers that are actually working; a running session
+ *    the sidebar has decided not to draw is the one outcome it must never
+ *    produce.
+ * 2. A branch holding a pinned session — the one the user has open — always
+ *    renders too, so opening a session can never be what makes it vanish once
+ *    a sibling overtakes it. Unlike a live branch it claims a slot rather than
+ *    adding a row, exactly as it did before.
+ * 3. The slots left over go to the rest — branches on screen for having been
+ *    written to recently, and quiet as far as anything else the sidebar can
+ *    observe — in tree order, which `buildSessionTree` already left sorted by
+ *    activity.
  *
  * The survivors are rendered back in tree order, so the rows still read most
  * recently active first beside their age badges.
+ *
+ * Nothing live can therefore end up behind a child toggle, which is why that
+ * toggle carries a count and no dots.
  *
  * This is a display filter, applied to the flattened tree on its way to the
  * renderer rather than inside `buildSessionTree`: everything else reading the
@@ -523,16 +535,24 @@ export const foldChildSessions = (
   };
 
   /**
+   * Whether a branch is running or blocked on the user, itself or anywhere
+   * beneath it. This is the row the sidebar is watched for, so it is drawn
+   * outside the cap rather than made to compete for a slot.
+   */
+  const isLiveBranch = (index: number): boolean =>
+    countInSubtree(index, liveOrWaitingSessionIds) > 0;
+
+  /** Whether a branch holds the session the user currently has open. */
+  const isPinnedBranch = (index: number): boolean => countInSubtree(index, pinnedSessionIds) > 0;
+
+  /**
    * Whether a branch has shown any of the signals that earn a row. Every one of
    * them is something observed — a run in the registry, a prompt waiting on the
    * user, a message written, the session being open — never an inference that
    * the work behind a quiet session is over.
    */
   const isWorkingBranch = (index: number): boolean => {
-    if (
-      countInSubtree(index, pinnedSessionIds) > 0
-      || countInSubtree(index, liveOrWaitingSessionIds) > 0
-    ) {
+    if (isPinnedBranch(index) || isLiveBranch(index)) {
       return true;
     }
 
@@ -543,26 +563,22 @@ export const foldChildSessions = (
 
   const selectVisibleChildIndexes = (childIndexes: number[]): number[] => {
     const workingIndexes = childIndexes.filter(isWorkingBranch);
-    if (workingIndexes.length <= visibleChildLimit) {
+    // Live branches are drawn however many there are, so the cap is measured
+    // against the others alone: three siblings on screen for recent activity
+    // are three whether or not five more are mid-turn beside them.
+    const cappedIndexes = workingIndexes.filter((index) => !isLiveBranch(index));
+    if (cappedIndexes.length <= visibleChildLimit) {
       return workingIndexes;
     }
 
-    const pinnedIndexes = workingIndexes.filter((index) => countInSubtree(index, pinnedSessionIds) > 0);
-    const otherIndexes = workingIndexes.filter((index) => !pinnedIndexes.includes(index));
-    const isWaiting = (index: number) => countInSubtree(index, waitingSessionIds) > 0;
-    const isLive = (index: number) => countInSubtree(index, liveOrWaitingSessionIds) > 0;
-    const priorityIndexes = [
-      ...otherIndexes.filter((index) => isWaiting(index)),
-      ...otherIndexes.filter((index) => !isWaiting(index) && isLive(index)),
-      ...otherIndexes.filter((index) => !isWaiting(index) && !isLive(index)),
-    ];
-    const freeSlotCount = Math.max(visibleChildLimit, pinnedIndexes.length) - pinnedIndexes.length;
-    const visibleIndexes = new Set([
-      ...pinnedIndexes,
-      ...priorityIndexes.slice(0, Math.max(freeSlotCount, 0)),
-    ]);
+    const pinnedIndexes = cappedIndexes.filter(isPinnedBranch);
+    const restIndexes = cappedIndexes.filter((index) => !isPinnedBranch(index));
+    // Both lists are in tree order, which `buildSessionTree` left sorted by
+    // activity, so what is left of the cap goes to the most recently active.
+    const freeSlotCount = Math.max(visibleChildLimit - pinnedIndexes.length, 0);
+    const keptIndexes = new Set([...pinnedIndexes, ...restIndexes.slice(0, freeSlotCount)]);
 
-    return childIndexes.filter((index) => visibleIndexes.has(index));
+    return workingIndexes.filter((index) => isLiveBranch(index) || keptIndexes.has(index));
   };
 
   const rows: SessionTreeRow[] = [];
@@ -603,14 +619,6 @@ export const foldChildSessions = (
       parentSessionId,
       foldedCount: foldedChildIndexes.reduce(
         (total, childIndex) => total + (subtreeEndIndexes[childIndex] - childIndex),
-        0,
-      ),
-      foldedLiveCount: foldedChildIndexes.reduce(
-        (total, childIndex) => total + countInSubtree(childIndex, liveOrWaitingSessionIds),
-        0,
-      ),
-      foldedWaitingCount: foldedChildIndexes.reduce(
-        (total, childIndex) => total + countInSubtree(childIndex, waitingSessionIds),
         0,
       ),
     });

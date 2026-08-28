@@ -78,10 +78,15 @@ const readRowIndentPx = (depth: number): number =>
   Math.min(Math.max(Math.trunc(depth), 0), MAX_SESSION_TREE_DEPTH) * NESTED_SESSION_INDENT_PX;
 
 /**
- * Dots on a fold toggle, standing in for the sessions it is holding: amber for
- * anything blocked on the user, green for anything still running. Both can show
- * at once, and they are kept apart because they ask different things — one
- * needs the user to answer a prompt, the other needs nothing at all.
+ * Dots on the project's fold toggle, standing in for the sessions it is
+ * holding: amber for anything blocked on the user, green for anything still
+ * running. Both can show at once, and they are kept apart because they ask
+ * different things — one needs the user to answer a prompt, the other needs
+ * nothing at all.
+ *
+ * Only this fold needs them. It cuts by top-level session, so a whole branch
+ * with a worker mid-turn inside it can fall past the cut. The child toggles
+ * cannot: a running or blocked child is never one of the rows they fold away.
  */
 function FoldedSessionIndicators({
   foldedLiveCount,
@@ -232,13 +237,13 @@ export default function SidebarProjectSessions({
     0,
   );
   // Folding must not swallow the green/amber dots: a session that is running or
-  // waiting on the user still reports itself through the toggle, whether it was
-  // this fold or a parent's that took it off screen.
+  // waiting on the user still reports itself through the toggle. Only the rows
+  // this fold took off screen are counted — a child toggle down there is
+  // holding nothing live, since a working child is never what a child fold
+  // gives up.
   const foldedLiveCount = foldedRows.reduce(
     (total, row) => total + (
-      row.kind === 'session'
-        ? (liveSessionIds.has(row.session.id) ? 1 : 0)
-        : row.foldedLiveCount
+      row.kind === 'session' && liveSessionIds.has(row.session.id) ? 1 : 0
     ),
     0,
   );
@@ -246,9 +251,7 @@ export default function SidebarProjectSessions({
   // than merely live, because the two ask different things of the user.
   const foldedWaitingCount = foldedRows.reduce(
     (total, row) => total + (
-      row.kind === 'session'
-        ? (attentionSessionIds.has(row.session.id) ? 1 : 0)
-        : row.foldedWaitingCount
+      row.kind === 'session' && attentionSessionIds.has(row.session.id) ? 1 : 0
     ),
     0,
   );
@@ -332,11 +335,6 @@ export default function SidebarProjectSessions({
                       hidden: row.foldedCount,
                       defaultValue: 'Show {{hidden}} more',
                     })}
-                    <FoldedSessionIndicators
-                      foldedLiveCount={row.foldedLiveCount}
-                      foldedWaitingCount={row.foldedWaitingCount}
-                      t={t}
-                    />
                   </>
                 ) : (
                   <>
