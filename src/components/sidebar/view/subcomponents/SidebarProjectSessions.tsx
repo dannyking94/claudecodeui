@@ -6,7 +6,13 @@ import { Button } from '../../../../shared/view/ui';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
-import { countSessionSubtreeRows } from '../../utils/sessionTree';
+import {
+  MAX_SESSION_TREE_DEPTH,
+  NESTED_SESSION_INDENT_PX,
+  countSessionSubtreeRows,
+  foldChildSessions,
+  type SessionTreeRow,
+} from '../../utils/sessionTree';
 
 import SidebarSessionItem from './SidebarSessionItem';
 
@@ -54,17 +60,21 @@ const VISIBLE_SESSION_LIMIT = 3;
  * between a parent and the children indented under it — and a project whose
  * top rows spawned workers still shows three conversations, not three rows.
  */
-const findFoldCutIndex = (sessions: SessionWithProvider[]): number => {
+const findFoldCutIndex = (rows: SessionTreeRow[]): number => {
   let cutIndex = 0;
   let topLevelCount = 0;
 
-  while (cutIndex < sessions.length && topLevelCount < VISIBLE_SESSION_LIMIT) {
-    cutIndex += countSessionSubtreeRows(sessions, cutIndex);
+  while (cutIndex < rows.length && topLevelCount < VISIBLE_SESSION_LIMIT) {
+    cutIndex += countSessionSubtreeRows(rows, cutIndex);
     topLevelCount += 1;
   }
 
   return cutIndex;
 };
+
+/** Matches the indentation `SidebarSessionItem` gives a row at the same depth. */
+const readRowIndentPx = (depth: number): number =>
+  Math.min(Math.max(Math.trunc(depth), 0), MAX_SESSION_TREE_DEPTH) * NESTED_SESSION_INDENT_PX;
 
 function SessionListSkeleton() {
   return (
@@ -109,14 +119,36 @@ export default function SidebarProjectSessions({
   t,
 }: SidebarProjectSessionsProps) {
   const [isShowingAllSessions, setIsShowingAllSessions] = useState(false);
+  const [expandedParentIds, setExpandedParentIds] = useState<ReadonlySet<string>>(() => new Set());
 
   if (!isExpanded) {
     return null;
   }
 
+  const toggleFoldedChildren = (parentSessionId: string) => {
+    setExpandedParentIds((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(parentSessionId)) {
+        next.add(parentSessionId);
+      }
+
+      return next;
+    });
+  };
+
   const hasSessions = sessions.length > 0;
-  const foldCutIndex = findFoldCutIndex(sessions);
-  const isFoldable = foldCutIndex < sessions.length;
+  // Running, or waiting on the user. Ids belonging to other projects are
+  // harmless: the fold only looks up sessions it is already rendering.
+  const liveSessionIds = new Set<string>([...activeSessions.keys(), ...attentionSessionIds]);
+  const rows = foldChildSessions(sessions, {
+    expandedParentIds,
+    liveSessionIds,
+    // The session on screen keeps its row even once siblings overtake it.
+    pinnedSessionIds: selectedSession ? new Set([String(selectedSession.id)]) : undefined,
+  });
+
+  const foldCutIndex = findFoldCutIndex(rows);
+  const isFoldable = foldCutIndex < rows.length;
   const isFolded = isFoldable && !isShowingAllSessions;
 
   // A selection past the cut would otherwise disappear the moment it is opened,
@@ -125,21 +157,40 @@ export default function SidebarProjectSessions({
   // apart from its subtree, indentation would only read as a child of whatever
   // row the fold happened to end on.
   const selectedIndex = selectedSession
-    ? sessions.findIndex((session) => session.id === selectedSession.id)
+    ? rows.findIndex((row) => row.kind === 'session' && row.session.id === selectedSession.id)
     : -1;
-  const visibleSessions = !isFolded
-    ? sessions
-    : selectedIndex >= foldCutIndex
-      ? [...sessions.slice(0, foldCutIndex), { ...sessions[selectedIndex], __depth: 0 }]
-      : sessions.slice(0, foldCutIndex);
+  const selectedRow = selectedIndex >= 0 ? rows[selectedIndex] : null;
+  const visibleRows: SessionTreeRow[] = !isFolded
+    ? rows
+    : selectedRow?.kind === 'session' && selectedIndex >= foldCutIndex
+      ? [
+          ...rows.slice(0, foldCutIndex),
+          { ...selectedRow, __depth: 0, session: { ...selectedRow.session, __depth: 0 } },
+        ]
+      : rows.slice(0, foldCutIndex);
 
-  const visibleSessionIds = new Set(visibleSessions.map((session) => session.id));
-  const foldedSessions = sessions.filter((session) => !visibleSessionIds.has(session.id));
+  // Everything the user cannot currently see under this project, counted once:
+  // the rows this fold took off screen, plus the children each toggle down
+  // there is holding. A toggle above the cut is on screen and speaks for
+  // itself.
+  const foldedRows = isFolded
+    ? rows.slice(foldCutIndex).filter((_, offset) => foldCutIndex + offset !== selectedIndex)
+    : [];
+  const foldedSessionCount = foldedRows.reduce(
+    (total, row) => total + (row.kind === 'session' ? 1 : row.foldedCount),
+    0,
+  );
   // Folding must not swallow the green/amber dots: a session that is running or
-  // waiting on the user still reports itself through the toggle.
-  const foldedLiveCount = foldedSessions.filter(
-    (session) => activeSessions.has(session.id) || attentionSessionIds.has(session.id),
-  ).length;
+  // waiting on the user still reports itself through the toggle, whether it was
+  // this fold or a parent's that took it off screen.
+  const foldedLiveCount = foldedRows.reduce(
+    (total, row) => total + (
+      row.kind === 'session'
+        ? (liveSessionIds.has(row.session.id) ? 1 : 0)
+        : row.foldedLiveCount
+    ),
+    0,
+  );
 
   return (
     <div className="ml-3 space-y-1 border-l border-border pl-3">
@@ -174,14 +225,14 @@ export default function SidebarProjectSessions({
         </div>
       ) : (
         <>
-          {visibleSessions.map((session) => (
+          {visibleRows.map((row) => (row.kind === 'session' ? (
             <SidebarSessionItem
-              key={session.id}
+              key={row.session.id}
               project={project}
-              session={session}
+              session={row.session}
               selectedSession={selectedSession}
-              isProcessing={activeSessions.has(session.id)}
-              needsAttention={attentionSessionIds.has(session.id)}
+              isProcessing={activeSessions.has(row.session.id)}
+              needsAttention={attentionSessionIds.has(row.session.id)}
               currentTime={currentTime}
               editingSession={editingSession}
               editingSessionName={editingSessionName}
@@ -194,7 +245,48 @@ export default function SidebarProjectSessions({
               onDeleteSession={onDeleteSession}
               t={t}
             />
-          ))}
+          ) : (
+            // Sits where the children it stands in for would be, indented and
+            // on the same tree line, so the count reads as part of that branch.
+            <div
+              key={`folded-children:${row.parentSessionId}`}
+              className="relative"
+              style={{ marginLeft: readRowIndentPx(row.__depth) }}
+            >
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute -left-2 top-0 h-full w-px bg-border"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-full justify-start gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => toggleFoldedChildren(row.parentSessionId)}
+                aria-expanded={row.foldedCount === 0}
+              >
+                {row.foldedCount > 0 ? (
+                  <>
+                    <ChevronDown className="h-3 w-3" />
+                    {t('sessions.showAllSessions', {
+                      hidden: row.foldedCount,
+                      defaultValue: 'Show {{hidden}} more',
+                    })}
+                    {row.foldedLiveCount > 0 && (
+                      <span
+                        className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"
+                        aria-label={t('tooltips.activeSessionIndicator')}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="h-3 w-3" />
+                    {t('sessions.showFewerSessions', { defaultValue: 'Show less' })}
+                  </>
+                )}
+              </Button>
+            </div>
+          )))}
 
           {isFoldable && (
             <Button
@@ -208,7 +300,7 @@ export default function SidebarProjectSessions({
                 <>
                   <ChevronDown className="h-3 w-3" />
                   {t('sessions.showAllSessions', {
-                    hidden: foldedSessions.length,
+                    hidden: foldedSessionCount,
                     defaultValue: 'Show {{hidden}} more',
                   })}
                   {foldedLiveCount > 0 && (

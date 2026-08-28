@@ -8,7 +8,7 @@ import type { Project, ProjectSession, LLMProvider } from '../../../../types/app
 import { api } from '../../../../utils/api';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import type { SessionWithProvider } from '../../types/types';
-import { MAX_SESSION_TREE_DEPTH } from '../../utils/sessionTree';
+import { MAX_SESSION_TREE_DEPTH, NESTED_SESSION_INDENT_PX } from '../../utils/sessionTree';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
@@ -72,9 +72,6 @@ const PROVIDER_LABELS: Record<LLMProvider, string> = {
 };
 
 type CopyState = 'loading' | 'idle' | 'copying' | 'copied' | 'error';
-
-/** Horizontal offset added per nesting level of the session tree. */
-const NESTED_SESSION_INDENT_PX = 14;
 
 /**
  * Last path segment of a project path, used to say which repository a parent

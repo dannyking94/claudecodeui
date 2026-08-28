@@ -1,6 +1,8 @@
 import type { Project } from '../../../types/app';
 import type { SessionWithProvider } from '../types/types';
 
+import { getSessionDate } from './utils';
+
 /**
  * Deepest nesting the sidebar indents. Beyond this, rows keep their real
  * position in the tree but stop moving right, so a long chain of spawned
@@ -8,12 +10,49 @@ import type { SessionWithProvider } from '../types/types';
  */
 export const MAX_SESSION_TREE_DEPTH = 4;
 
+/** Horizontal offset added per nesting level of the session tree. */
+export const NESTED_SESSION_INDENT_PX = 14;
+
+/**
+ * Children rendered under one parent before the rest fold behind a toggle.
+ *
+ * Three mirrors the fold the sidebar already applies to top-level sessions, and
+ * keeps one busy parent — an agent that spawned a dozen workers — from burying
+ * every other conversation in the project.
+ */
+export const MAX_VISIBLE_CHILD_SESSIONS = 3;
+
 const readSessionId = (session: SessionWithProvider): string => String(session.id ?? '');
 
 const readParentSessionId = (session: SessionWithProvider): string => {
   const parentSessionId = session.parentSessionId;
   return typeof parentSessionId === 'string' ? parentSessionId.trim() : '';
 };
+
+/**
+ * When a session was last active, as a number.
+ *
+ * `getSessionDate` reads `lastActivity` and falls back to `createdAt`, which is
+ * the value the row's age badge is rendered from, so an order built on it
+ * always agrees with the "2m" / "10hr" the user is reading beside it. Ordering
+ * on creation time instead would sink a session that has been working for
+ * hours below a newer idle one.
+ */
+const readActivityTime = (session: SessionWithProvider): number => {
+  const activityTime = getSessionDate(session).getTime();
+  // An unparseable timestamp sorts last rather than poisoning the comparison
+  // with NaN, which would scatter the siblings around it instead.
+  return Number.isNaN(activityTime) ? 0 : activityTime;
+};
+
+/**
+ * Most recently active first. Sessions last active at the same moment keep the
+ * order they arrived in, the sort being stable.
+ */
+const compareSessionsByActivity = (
+  left: SessionWithProvider,
+  right: SessionWithProvider,
+): number => readActivityTime(right) - readActivityTime(left);
 
 /** One project together with the sessions the sidebar has loaded for it. */
 export type ProjectSessions = {
@@ -155,8 +194,13 @@ export const groupSessionsByRootProject = (
  * database, bypassing the API's cycle check) are broken at the link that
  * closes the loop, so every session is emitted exactly once.
  *
- * Input order is preserved: roots keep the caller's sort, and siblings appear
- * under their parent in that same order.
+ * Rows come out most recently active first at every level, not just the top,
+ * with sessions last active at the same moment keeping the order they arrived
+ * in. Roots are sorted rather than left in input order because
+ * `groupSessionsByRootProject` hands over the concatenation of several
+ * projects' lists, and two date-sorted lists joined end to end are not sorted;
+ * for a project whose sessions all stayed put the sort is a no-op, the caller
+ * having already ordered them the same way.
  */
 export const buildSessionTree = (sessions: SessionWithProvider[]): SessionWithProvider[] => {
   const sessionIds = new Set(sessions.map(readSessionId));
@@ -208,6 +252,11 @@ export const buildSessionTree = (sessions: SessionWithProvider[]): SessionWithPr
     }
   }
 
+  rootSessions.sort(compareSessionsByActivity);
+  for (const siblings of childrenByParentId.values()) {
+    siblings.sort(compareSessionsByActivity);
+  }
+
   const orderedSessions: SessionWithProvider[] = [];
   const emittedIds = new Set<string>();
 
@@ -240,21 +289,223 @@ export const buildSessionTree = (sessions: SessionWithProvider[]): SessionWithPr
  *
  * The sidebar's "show more" fold counts top-level sessions, so it needs to
  * know how far each one's subtree reaches to avoid cutting between a parent
- * and its children.
+ * and its children. Rows are read by depth alone, so this also measures a
+ * subtree that `foldChildSessions` has put a toggle row inside.
  */
 export const countSessionSubtreeRows = (
-  orderedSessions: SessionWithProvider[],
+  orderedRows: readonly { __depth?: number }[],
   startIndex: number,
 ): number => {
-  const rootDepth = orderedSessions[startIndex]?.__depth ?? 0;
+  const rootDepth = orderedRows[startIndex]?.__depth ?? 0;
   let rowCount = 1;
 
   while (
-    startIndex + rowCount < orderedSessions.length
-    && (orderedSessions[startIndex + rowCount].__depth ?? 0) > rootDepth
+    startIndex + rowCount < orderedRows.length
+    && (orderedRows[startIndex + rowCount].__depth ?? 0) > rootDepth
   ) {
     rowCount += 1;
   }
 
   return rowCount;
+};
+
+/**
+ * One row of the sidebar's session list: a session, or the toggle standing in
+ * for the children folded away under the row above it.
+ *
+ * Both carry `__depth` so `countSessionSubtreeRows` can measure a subtree that
+ * contains a toggle, and so the toggle indents like the children it hides.
+ */
+export type SessionTreeRow =
+  | {
+      kind: 'session';
+      __depth: number;
+      session: SessionWithProvider;
+    }
+  | {
+      kind: 'foldedChildren';
+      __depth: number;
+      parentSessionId: string;
+      /**
+       * Sessions currently folded away under this parent, descendants of a
+       * folded child included. Zero while the parent is expanded, which is how
+       * the toggle knows to offer folding them back up.
+       */
+      foldedCount: number;
+      /** How many of those are running or waiting on the user. */
+      foldedLiveCount: number;
+    };
+
+export type FoldChildSessionsOptions = {
+  /** Parents the user opened; every one of their children is rendered. */
+  expandedParentIds?: ReadonlySet<string>;
+  /** Sessions running, or waiting on the user. */
+  liveSessionIds?: ReadonlySet<string>;
+  /** Sessions that stay on screen whatever their activity — the open one. */
+  pinnedSessionIds?: ReadonlySet<string>;
+  /** Defaults to `MAX_VISIBLE_CHILD_SESSIONS`. */
+  visibleChildLimit?: number;
+};
+
+/**
+ * Caps how many children each parent renders, folding the rest behind a toggle
+ * row placed at the end of that parent's visible children.
+ *
+ * This is a display limit, applied to the flattened tree on its way to the
+ * renderer rather than inside `buildSessionTree`: everything else reading the
+ * tree — session counts, id lookups, the project-level fold — still sees every
+ * loaded session, and nothing here can make a row unreachable.
+ *
+ * Which children survive the cap is decided in this order:
+ *
+ * 1. A branch holding a pinned session — the one the user has open — always
+ *    renders, so opening a session can never be what makes it vanish once a
+ *    sibling overtakes it. It claims a slot rather than adding a row.
+ * 2. Branches holding a live session take the remaining slots ahead of idle
+ *    ones, so a worker running right now cannot lose its place to an idle
+ *    sibling. When more branches are live than there are slots, the most
+ *    recently active of them render and the toggle reports the rest as live.
+ * 3. The rest fill up in tree order, which `buildSessionTree` already left
+ *    sorted by activity.
+ *
+ * The survivors are rendered back in tree order, so the rows still read most
+ * recently active first beside their age badges.
+ *
+ * A row's parent is read from the depths in the flattened list — the nearest
+ * row above it one level shallower — which keeps this in step with what is
+ * actually drawn and makes folding a child fold its descendants with it.
+ */
+export const foldChildSessions = (
+  orderedSessions: SessionWithProvider[],
+  options: FoldChildSessionsOptions = {},
+): SessionTreeRow[] => {
+  const {
+    expandedParentIds,
+    liveSessionIds,
+    pinnedSessionIds,
+    visibleChildLimit = MAX_VISIBLE_CHILD_SESSIONS,
+  } = options;
+
+  const depths = orderedSessions.map((session) => Math.max(Math.trunc(session.__depth ?? 0), 0));
+
+  // Every subtree is a contiguous run in the flattened list, so one backward
+  // pass gives each row the index its descendants end at.
+  const subtreeEndIndexes: number[] = new Array(orderedSessions.length);
+  for (let index = orderedSessions.length - 1; index >= 0; index -= 1) {
+    let endIndex = index + 1;
+    while (endIndex < orderedSessions.length && depths[endIndex] > depths[index]) {
+      endIndex = subtreeEndIndexes[endIndex];
+    }
+
+    subtreeEndIndexes[index] = endIndex;
+  }
+
+  const rootIndexes: number[] = [];
+  const childIndexesByParentIndex = new Map<number, number[]>();
+  const latestIndexByDepth: number[] = [];
+
+  depths.forEach((depth, index) => {
+    const parentIndex = depth > 0 ? latestIndexByDepth[depth - 1] : undefined;
+    latestIndexByDepth[depth] = index;
+    // Anything recorded deeper belongs to a branch already left behind, so a
+    // row that skips a level is rendered flat rather than attached to it.
+    latestIndexByDepth.length = depth + 1;
+
+    if (parentIndex === undefined) {
+      rootIndexes.push(index);
+      return;
+    }
+
+    const siblings = childIndexesByParentIndex.get(parentIndex);
+    if (siblings) {
+      siblings.push(index);
+      return;
+    }
+
+    childIndexesByParentIndex.set(parentIndex, [index]);
+  });
+
+  const countInSubtree = (index: number, ids: ReadonlySet<string> | undefined): number => {
+    if (!ids || ids.size === 0) {
+      return 0;
+    }
+
+    let matches = 0;
+    for (let cursor = index; cursor < subtreeEndIndexes[index]; cursor += 1) {
+      if (ids.has(readSessionId(orderedSessions[cursor]))) {
+        matches += 1;
+      }
+    }
+
+    return matches;
+  };
+
+  const selectVisibleChildIndexes = (childIndexes: number[]): number[] => {
+    if (childIndexes.length <= visibleChildLimit) {
+      return childIndexes;
+    }
+
+    const pinnedIndexes = childIndexes.filter((index) => countInSubtree(index, pinnedSessionIds) > 0);
+    const otherIndexes = childIndexes.filter((index) => !pinnedIndexes.includes(index));
+    const liveFirstIndexes = [
+      ...otherIndexes.filter((index) => countInSubtree(index, liveSessionIds) > 0),
+      ...otherIndexes.filter((index) => countInSubtree(index, liveSessionIds) === 0),
+    ];
+    const freeSlotCount = Math.max(visibleChildLimit, pinnedIndexes.length) - pinnedIndexes.length;
+    const visibleIndexes = new Set([
+      ...pinnedIndexes,
+      ...liveFirstIndexes.slice(0, Math.max(freeSlotCount, 0)),
+    ]);
+
+    return childIndexes.filter((index) => visibleIndexes.has(index));
+  };
+
+  const rows: SessionTreeRow[] = [];
+
+  const emitSubtree = (index: number): void => {
+    rows.push({ kind: 'session', __depth: depths[index], session: orderedSessions[index] });
+
+    const childIndexes = childIndexesByParentIndex.get(index);
+    if (!childIndexes) {
+      return;
+    }
+
+    const parentSessionId = readSessionId(orderedSessions[index]);
+    const isExpanded = expandedParentIds?.has(parentSessionId) ?? false;
+    const visibleChildIndexes = isExpanded ? childIndexes : selectVisibleChildIndexes(childIndexes);
+
+    for (const childIndex of visibleChildIndexes) {
+      emitSubtree(childIndex);
+    }
+
+    const foldedChildIndexes = childIndexes.filter(
+      (childIndex) => !visibleChildIndexes.includes(childIndex),
+    );
+    // An expanded parent keeps its toggle with nothing behind it, otherwise
+    // there would be no way to fold the children back up.
+    const isFoldable = childIndexes.length > visibleChildLimit;
+    if (foldedChildIndexes.length === 0 && !(isExpanded && isFoldable)) {
+      return;
+    }
+
+    rows.push({
+      kind: 'foldedChildren',
+      __depth: depths[index] + 1,
+      parentSessionId,
+      foldedCount: foldedChildIndexes.reduce(
+        (total, childIndex) => total + (subtreeEndIndexes[childIndex] - childIndex),
+        0,
+      ),
+      foldedLiveCount: foldedChildIndexes.reduce(
+        (total, childIndex) => total + countInSubtree(childIndex, liveSessionIds),
+        0,
+      ),
+    });
+  };
+
+  for (const index of rootIndexes) {
+    emitSubtree(index);
+  }
+
+  return rows;
 };

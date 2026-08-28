@@ -7,8 +7,10 @@ import type { SessionWithProvider } from '../types/types';
 import {
   buildSessionTree,
   countSessionSubtreeRows,
+  foldChildSessions,
   groupSessionsByRootProject,
   type ProjectSessions,
+  type SessionTreeRow,
 } from './sessionTree';
 
 type SessionFixture = {
@@ -16,6 +18,8 @@ type SessionFixture = {
   parentSessionId?: string | null;
   parentSummary?: string | null;
   parentProjectPath?: string | null;
+  lastActivity?: string | null;
+  createdAt?: string;
 };
 
 const createSessions = (fixtures: SessionFixture[]): SessionWithProvider[] =>
@@ -287,4 +291,273 @@ test('regrouping never mutates the sessions it was given', () => {
 
   assert.equal(worker.__ownerProject, undefined);
   assert.notEqual(groups.get('parent-repo')?.[1], worker);
+});
+
+/** Distinct, descending activity stamps so sibling order is never ambiguous. */
+const minutesAgo = (minutes: number): string =>
+  new Date(Date.parse('2026-08-28T12:00:00.000Z') - minutes * 60_000).toISOString();
+
+test('siblings are ordered by activity, most recent first', () => {
+  // The sidebar's complaint: a worker active two minutes ago sat below two that
+  // had not moved in half a day, purely because of the order they were queried.
+  const tree = buildSessionTree(createSessions([
+    { id: 'parent', lastActivity: minutesAgo(2) },
+    { id: 'twelve-hours', parentSessionId: 'parent', lastActivity: minutesAgo(720) },
+    { id: 'ten-hours', parentSessionId: 'parent', lastActivity: minutesAgo(600) },
+    { id: 'two-minutes', parentSessionId: 'parent', lastActivity: minutesAgo(2) },
+  ]));
+
+  assert.deepEqual(readLayout(tree), [
+    ['parent', 0],
+    ['two-minutes', 1],
+    ['ten-hours', 1],
+    ['twelve-hours', 1],
+  ]);
+});
+
+test('a session with no recorded activity is ordered by when it was created', () => {
+  // Same fallback the age badge uses, so the order still matches the label.
+  const tree = buildSessionTree(createSessions([
+    { id: 'parent', lastActivity: minutesAgo(1) },
+    { id: 'active-an-hour-ago', parentSessionId: 'parent', lastActivity: minutesAgo(60) },
+    {
+      id: 'created-minutes-ago',
+      parentSessionId: 'parent',
+      lastActivity: null,
+      createdAt: minutesAgo(5),
+    },
+  ]));
+
+  assert.deepEqual(readLayout(tree), [
+    ['parent', 0],
+    ['created-minutes-ago', 1],
+    ['active-an-hour-ago', 1],
+  ]);
+});
+
+test('siblings last active at the same moment keep the order they arrived in', () => {
+  const tree = buildSessionTree(createSessions([
+    { id: 'parent' },
+    { id: 'first', parentSessionId: 'parent', lastActivity: minutesAgo(30) },
+    { id: 'second', parentSessionId: 'parent', lastActivity: minutesAgo(30) },
+    { id: 'third', parentSessionId: 'parent', lastActivity: minutesAgo(30) },
+  ]));
+
+  assert.deepEqual(readLayout(tree), [
+    ['parent', 0],
+    ['first', 1],
+    ['second', 1],
+    ['third', 1],
+  ]);
+});
+
+test('every level is ordered by activity, not just the first', () => {
+  const tree = buildSessionTree(createSessions([
+    { id: 'stale-root', lastActivity: minutesAgo(900) },
+    { id: 'busy-root', lastActivity: minutesAgo(1) },
+    { id: 'old-child', parentSessionId: 'busy-root', lastActivity: minutesAgo(400) },
+    { id: 'new-child', parentSessionId: 'busy-root', lastActivity: minutesAgo(3) },
+    { id: 'old-grandchild', parentSessionId: 'new-child', lastActivity: minutesAgo(200) },
+    { id: 'new-grandchild', parentSessionId: 'new-child', lastActivity: minutesAgo(4) },
+  ]));
+
+  assert.deepEqual(readLayout(tree), [
+    ['busy-root', 0],
+    ['new-child', 1],
+    ['new-grandchild', 2],
+    ['old-grandchild', 2],
+    ['old-child', 1],
+    ['stale-root', 0],
+  ]);
+});
+
+/** Session rows as `[id, depth]`, fold toggles as `['fold:<hidden count>', depth]`. */
+const readRows = (rows: SessionTreeRow[]): Array<[string, number]> => rows.map((row) => (
+  row.kind === 'session'
+    ? [String(row.session.id), row.__depth]
+    : [`fold:${row.foldedCount}`, row.__depth]
+));
+
+const createFamily = (childCount: number, extra: SessionFixture[] = []): SessionWithProvider[] =>
+  buildSessionTree(createSessions([
+    { id: 'parent', lastActivity: minutesAgo(1) },
+    ...Array.from({ length: childCount }, (_, index) => ({
+      id: `child-${index + 1}`,
+      parentSessionId: 'parent',
+      // Ten minutes apart, so `child-1` is always the most recently active.
+      lastActivity: minutesAgo((index + 1) * 10),
+    })),
+    ...extra,
+  ]));
+
+test('a parent shows three children and folds the rest behind a toggle', () => {
+  assert.deepEqual(readRows(foldChildSessions(createFamily(5))), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+    ['fold:2', 1],
+  ]);
+});
+
+test('three or fewer children render without a toggle', () => {
+  assert.deepEqual(readRows(foldChildSessions(createFamily(3))), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+  ]);
+});
+
+test('a folded child takes its own descendants with it, and the count says so', () => {
+  const rows = foldChildSessions(createFamily(4, [
+    { id: 'grandchild', parentSessionId: 'child-4', lastActivity: minutesAgo(50) },
+  ]));
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+    ['fold:2', 1],
+  ]);
+});
+
+test('a running child keeps its slot ahead of an idle sibling', () => {
+  // The oldest child by activity, but it is working right now: an idle sibling
+  // is what gets folded, never it.
+  const rows = foldChildSessions(createFamily(4), {
+    liveSessionIds: new Set(['child-4']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    // Kept in activity order, so the rows still read newest-first.
+    ['child-4', 1],
+    ['fold:1', 1],
+  ]);
+});
+
+test('a branch with a running grandchild keeps its slot too', () => {
+  const rows = foldChildSessions(createFamily(4, [
+    { id: 'busy-grandchild', parentSessionId: 'child-4', lastActivity: minutesAgo(45) },
+  ]), {
+    liveSessionIds: new Set(['busy-grandchild']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-4', 1],
+    ['busy-grandchild', 2],
+    ['fold:1', 1],
+  ]);
+});
+
+test('when every child is live the most recent ones show and the toggle reports the rest', () => {
+  const rows = foldChildSessions(createFamily(5), {
+    liveSessionIds: new Set(['child-1', 'child-2', 'child-3', 'child-4', 'child-5']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+    ['fold:2', 1],
+  ]);
+  // Nothing running is folded away silently: the toggle carries the live count
+  // that puts the pulsing dot on it.
+  const toggle = rows[4];
+  assert.equal(toggle.kind === 'foldedChildren' && toggle.foldedLiveCount, 2);
+});
+
+test('the open session is never the row a fold takes away', () => {
+  // It has fallen to last by activity while the user is reading it.
+  const rows = foldChildSessions(createFamily(5), {
+    pinnedSessionIds: new Set(['child-5']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    // Claims a slot rather than adding a row: still three children on screen.
+    ['child-5', 1],
+    ['fold:2', 1],
+  ]);
+});
+
+test('a pinned grandchild keeps the child it hangs from on screen', () => {
+  const rows = foldChildSessions(createFamily(5, [
+    { id: 'open-grandchild', parentSessionId: 'child-5', lastActivity: minutesAgo(300) },
+  ]), {
+    pinnedSessionIds: new Set(['open-grandchild']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-5', 1],
+    ['open-grandchild', 2],
+    ['fold:2', 1],
+  ]);
+});
+
+test('an expanded parent shows every child and keeps a toggle to fold them back', () => {
+  const rows = foldChildSessions(createFamily(5), {
+    expandedParentIds: new Set(['parent']),
+  });
+
+  assert.deepEqual(readRows(rows), [
+    ['parent', 0],
+    ['child-1', 1],
+    ['child-2', 1],
+    ['child-3', 1],
+    ['child-4', 1],
+    ['child-5', 1],
+    ['fold:0', 1],
+  ]);
+});
+
+test('the cap applies at every depth of the tree', () => {
+  const rows = foldChildSessions(buildSessionTree(createSessions([
+    { id: 'root', lastActivity: minutesAgo(1) },
+    { id: 'child', parentSessionId: 'root', lastActivity: minutesAgo(2) },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `grandchild-${index + 1}`,
+      parentSessionId: 'child',
+      lastActivity: minutesAgo((index + 1) * 10),
+    })),
+  ])));
+
+  assert.deepEqual(readRows(rows), [
+    ['root', 0],
+    ['child', 1],
+    ['grandchild-1', 2],
+    ['grandchild-2', 2],
+    ['grandchild-3', 2],
+    ['fold:1', 2],
+  ]);
+});
+
+test('a fold toggle counts as part of the subtree it sits in', () => {
+  // The project-level fold measures top-level sessions this way, so a toggle
+  // must never be left stranded on the far side of that cut.
+  const rows = foldChildSessions(createFamily(5));
+
+  assert.equal(countSessionSubtreeRows(rows, 0), 5);
+});
+
+test('sessions with no children are left alone', () => {
+  const rows = foldChildSessions(buildSessionTree(createSessions([
+    { id: 'alone', lastActivity: minutesAgo(1) },
+  ])));
+
+  assert.deepEqual(readRows(rows), [['alone', 0]]);
+  assert.deepEqual(foldChildSessions([]), []);
 });
