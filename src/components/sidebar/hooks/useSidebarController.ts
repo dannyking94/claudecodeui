@@ -21,6 +21,7 @@ import {
   readLegacyStarredProjectIds,
   readProjectSortOrder,
   sortProjects,
+  writeLastVisitedSessionId,
 } from '../utils/utils';
 import { buildSessionTree, groupSessionsByRootProject } from '../utils/sessionTree';
 
@@ -443,6 +444,7 @@ export function useSidebarController({
 
   const handleSessionClick = useCallback(
     (session: SessionWithProvider, projectId: string) => {
+      writeLastVisitedSessionId(projectId, String(session.id));
       // Tag the session with its owning projectId so downstream handlers
       // can correlate it with the selectedProject in the app state.
       onSessionSelect({ ...session, __projectId: projectId });

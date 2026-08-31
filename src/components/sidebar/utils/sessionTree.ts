@@ -62,6 +62,28 @@ const compareSessionsByActivity = (
   right: SessionWithProvider,
 ): number => readActivityTime(right) - readActivityTime(left);
 
+/**
+ * Chooses the session a project row should open.
+ *
+ * A remembered session wins while it is still loaded. Otherwise the same
+ * activity ordering used by the session tree supplies the freshest fallback.
+ */
+export const pickProjectEntrySession = (
+  sessions: SessionWithProvider[],
+  lastVisitedId: string | null,
+): SessionWithProvider | null => {
+  if (lastVisitedId) {
+    const lastVisitedSession = sessions.find(
+      (session) => readSessionId(session) === lastVisitedId,
+    );
+    if (lastVisitedSession) {
+      return lastVisitedSession;
+    }
+  }
+
+  return [...sessions].sort(compareSessionsByActivity)[0] ?? null;
+};
+
 /** One project together with the sessions the sidebar has loaded for it. */
 export type ProjectSessions = {
   project: Project;

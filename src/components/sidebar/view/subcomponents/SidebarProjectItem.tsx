@@ -7,7 +7,8 @@ import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
-import { getTaskIndicatorStatus } from '../../utils/utils';
+import { pickProjectEntrySession } from '../../utils/sessionTree';
+import { getTaskIndicatorStatus, readLastVisitedSessionId } from '../../utils/utils';
 
 import TaskIndicator from './TaskIndicator';
 import SidebarProjectSessions from './SidebarProjectSessions';
@@ -153,6 +154,14 @@ export default function SidebarProjectItem({
   const selectAndToggleProject = () => {
     if (selectedProject?.projectId !== project.projectId) {
       onProjectSelect(project);
+      const entrySession = pickProjectEntrySession(
+        sessions,
+        readLastVisitedSessionId(project.projectId),
+      );
+      if (entrySession) {
+        const ownerProjectId = entrySession.__ownerProject?.projectId ?? project.projectId;
+        onSessionSelect(entrySession, ownerProjectId);
+      }
     }
 
     toggleProject();
@@ -170,7 +179,7 @@ export default function SidebarProjectItem({
                 !isSelected &&
                 'bg-yellow-50/50 dark:bg-yellow-900/5 border-yellow-200/30 dark:border-yellow-800/30',
             )}
-            onClick={toggleProject}
+            onClick={selectAndToggleProject}
           >
             <div className="flex items-center justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-3">

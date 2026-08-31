@@ -9,6 +9,7 @@ import {
   countSessionSubtreeRows,
   foldChildSessions,
   groupSessionsByRootProject,
+  pickProjectEntrySession,
   type ProjectSessions,
   type SessionTreeRow,
 } from './sessionTree';
@@ -297,6 +298,37 @@ test('regrouping never mutates the sessions it was given', () => {
 /** Distinct, descending activity stamps so sibling order is never ambiguous. */
 const minutesAgo = (minutes: number): string =>
   new Date(Date.parse('2026-08-28T12:00:00.000Z') - minutes * 60_000).toISOString();
+
+test('project entry picks a present last-visited session', () => {
+  const sessions = createSessions([
+    { id: 'newest', lastActivity: minutesAgo(1) },
+    { id: 'last-visited', lastActivity: minutesAgo(20) },
+  ]);
+
+  assert.equal(pickProjectEntrySession(sessions, 'last-visited')?.id, 'last-visited');
+});
+
+test('project entry falls back from a stale last-visited id to most recent', () => {
+  const sessions = createSessions([
+    { id: 'older', lastActivity: minutesAgo(20) },
+    { id: 'newest', lastActivity: minutesAgo(1) },
+  ]);
+
+  assert.equal(pickProjectEntrySession(sessions, 'deleted')?.id, 'newest');
+});
+
+test('project entry picks the most recent session when none was visited', () => {
+  const sessions = createSessions([
+    { id: 'older', lastActivity: minutesAgo(20) },
+    { id: 'newest', lastActivity: minutesAgo(1) },
+  ]);
+
+  assert.equal(pickProjectEntrySession(sessions, null)?.id, 'newest');
+});
+
+test('project entry returns null for a project without sessions', () => {
+  assert.equal(pickProjectEntrySession([], 'deleted'), null);
+});
 
 test('siblings are ordered by activity, most recent first', () => {
   // The sidebar's complaint: a worker active two minutes ago sat below two that

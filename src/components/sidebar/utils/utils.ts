@@ -53,6 +53,49 @@ export const clearLegacyStarredProjectIds = () => {
   }
 };
 
+const LAST_VISITED_SESSIONS_STORAGE_KEY = 'sidebarLastVisitedSessions';
+
+export const readLastVisitedSessionId = (projectId: string): string | null => {
+  try {
+    const saved = localStorage.getItem(LAST_VISITED_SESSIONS_STORAGE_KEY);
+    if (!saved) {
+      return null;
+    }
+
+    const parsed = JSON.parse(saved) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const sessionId = (parsed as Record<string, unknown>)[projectId];
+    return typeof sessionId === 'string' && sessionId.trim() ? sessionId : null;
+  } catch {
+    return null;
+  }
+};
+
+export const writeLastVisitedSessionId = (projectId: string, sessionId: string): void => {
+  try {
+    const saved = localStorage.getItem(LAST_VISITED_SESSIONS_STORAGE_KEY);
+    let parsed: unknown = null;
+    try {
+      parsed = saved ? JSON.parse(saved) as unknown : null;
+    } catch {
+      // Replace malformed legacy/user-edited data with a fresh map below.
+    }
+    const lastVisitedByProject = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+
+    localStorage.setItem(LAST_VISITED_SESSIONS_STORAGE_KEY, JSON.stringify({
+      ...lastVisitedByProject,
+      [projectId]: sessionId,
+    }));
+  } catch {
+    // Keep navigation responsive when storage is unavailable or malformed.
+  }
+};
+
 const getCreatedTimestamp = (session: SessionWithProvider): string => {
   return String(session.createdAt || session.created_at || '');
 };
