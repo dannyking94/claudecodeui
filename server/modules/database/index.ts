@@ -1,5 +1,7 @@
 export { initializeDatabase } from '@/modules/database/init-db.js';
-export { closeConnection, getConnection, getDatabasePath } from '@/modules/database/connection.js';
+// readDataVersion: used by the providers module's sessions watcher to detect
+// commits made by processes other than this server.
+export { closeConnection, getConnection, getDatabasePath, readDataVersion } from '@/modules/database/connection.js';
 export { apiKeysDb } from '@/modules/database/repositories/api-keys.js';
 export { appConfigDb } from '@/modules/database/repositories/app-config.js';
 export { credentialsDb } from '@/modules/database/repositories/credentials.js';

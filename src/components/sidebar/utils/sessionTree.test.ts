@@ -216,6 +216,43 @@ test('a session moves to the project of the session that spawned it', () => {
   );
 });
 
+test('a parent link that arrives after the row re-nests it without a reload', () => {
+  // A worker spawned outside the app is indexed from its first transcript lines,
+  // which say nothing about who spawned it; the parent link is written into the
+  // database moments later. The sidebar therefore has to survive seeing the row
+  // flat first and nest it once the delta carrying `parentSessionId` lands,
+  // rather than waiting for a full reload to re-read the tree.
+  const spawnedFlat = createProjectSessions([
+    ['secretary-repo', [{ id: 'secretary' }]],
+    ['worker-repo', [{ id: 'worker' }]],
+  ]);
+
+  const beforeLink = groupSessionsByRootProject(spawnedFlat);
+  assert.deepEqual(readGroup(beforeLink, 'secretary-repo'), [['secretary', null]]);
+  assert.deepEqual(readGroup(beforeLink, 'worker-repo'), [['worker', null]]);
+
+  // The delta upserts the same row in place, now carrying its parent.
+  const linked = spawnedFlat.map(({ project, sessions }) => ({
+    project,
+    sessions: sessions.map((session) => (
+      session.id === 'worker'
+        ? { ...session, parentSessionId: 'secretary', parentSummary: 'secretary' }
+        : session
+    )),
+  }));
+
+  const afterLink = groupSessionsByRootProject(linked);
+  assert.deepEqual(readGroup(afterLink, 'secretary-repo'), [
+    ['secretary', null],
+    ['worker', 'worker-repo'],
+  ]);
+  assert.deepEqual(readGroup(afterLink, 'worker-repo'), []);
+  assert.deepEqual(
+    buildSessionTree(afterLink.get('secretary-repo') ?? []).map((session) => session.__depth),
+    [0, 1],
+  );
+});
+
 test('a chain of spawns collapses into the project of its root', () => {
   const groups = groupSessionsByRootProject(createProjectSessions([
     ['root-repo', [{ id: 'root' }]],

@@ -4,13 +4,18 @@ import { promises as fsPromises } from 'node:fs';
 
 import chokidar, { type FSWatcher } from 'chokidar';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { projectsDb, readDataVersion, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
-import type { LLMProvider } from '@/shared/types.js';
+import type { LLMProvider, SessionChangeSignature } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 
-type WatcherEventType = 'add' | 'change';
+/**
+ * What prompted a pending delta. `add` and `change` come from chokidar; `db`
+ * comes from a session row an outside process committed, which never produces
+ * a filesystem event at all.
+ */
+type WatcherEventType = 'add' | 'change' | 'db';
 
 const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> = [
   {
@@ -45,6 +50,17 @@ const WATCHER_IGNORED_PATTERNS = [
 
 const PROJECTS_UPDATE_DEBOUNCE_MS = 500;
 const PROJECTS_UPDATE_MAX_WAIT_MS = 2_000;
+
+/**
+ * How often the watcher asks SQLite whether another process committed.
+ *
+ * The check itself is one `PRAGMA data_version` read — microseconds, no table
+ * access — and the row scan behind it runs only when that counter actually
+ * moved. Two seconds therefore buys a sidebar that keeps up with an external
+ * spawner at a cost that does not register next to the file watchers already
+ * running, and without ever re-fetching the session list on a timer.
+ */
+const SESSION_DB_POLL_INTERVAL_MS = 2_000;
 
 const watchers: FSWatcher[] = [];
 
@@ -231,6 +247,96 @@ async function flushPendingWatcherUpdate(): Promise<void> {
 }
 
 /**
+ * Last `PRAGMA data_version` observed, and the row fingerprints that went with
+ * it. Both are module-private: the diff only means anything against the
+ * snapshot this watcher itself took.
+ */
+let lastSeenDataVersion: number | null = null;
+let lastSessionRevisions = new Map<string, string>();
+let sessionDbPollTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Records the current database state as the baseline for later diffs.
+ *
+ * Called once at startup so the first poll compares against what was already
+ * there, instead of reporting every existing session as freshly changed.
+ *
+ * Exported for this module's tests, which need a baseline without starting the
+ * filesystem watchers `initializeSessionsWatcher` would otherwise spin up over
+ * the real home directory.
+ */
+export function captureSessionDbBaseline(): void {
+  lastSeenDataVersion = readDataVersion();
+  lastSessionRevisions = new Map(
+    sessionsDb.getSessionChangeSignatures().map((signature) => [signature.sessionId, signature.revision])
+  );
+}
+
+/**
+ * Emits `session_upserted` for rows a process other than this server rewrote.
+ *
+ * Session nesting is invisible to the file watchers above: an external spawner
+ * writes `custom_name`, `model` and `parent_session_id` straight into SQLite,
+ * touching nothing on disk. Worse, the ordering guarantees a stale row — a
+ * worker's first transcript lines land *before* its parent link is set, so the
+ * delta the file event produced carries `parentSessionId: null`. Without the
+ * corrected delta below, the sidebar keeps that flat row until a full reload.
+ *
+ * `data_version` never moves for this server's own writes, so the common case
+ * costs a single pragma read and returns. When it has moved, the row scan finds
+ * the changed sessions and hands them to the same debounce and broadcast the
+ * file watchers use — one mechanism, two ways of noticing.
+ *
+ * The interval started by `initializeSessionsWatcher` is the production caller.
+ * It is exported so this module's tests can run one check synchronously instead
+ * of waiting on that timer.
+ */
+export function pollExternalSessionDbChanges(): void {
+  try {
+    const dataVersion = readDataVersion();
+    if (dataVersion === lastSeenDataVersion) {
+      return;
+    }
+    lastSeenDataVersion = dataVersion;
+
+    const signatures = sessionsDb.getSessionChangeSignatures();
+    const nextRevisions = new Map<string, string>();
+    const changedSessions: SessionChangeSignature[] = [];
+
+    for (const signature of signatures) {
+      nextRevisions.set(signature.sessionId, signature.revision);
+      if (lastSessionRevisions.get(signature.sessionId) !== signature.revision) {
+        changedSessions.push(signature);
+      }
+    }
+
+    // A row this server wrote itself did not move `data_version`, so its
+    // snapshot entry is stale until some outside commit brings us here. That
+    // makes it look "changed" now and re-broadcast a delta the app already
+    // sent. Harmless — `session_upserted` is a keyed upsert — and it keeps the
+    // snapshot honest for the next diff.
+    lastSessionRevisions = nextRevisions;
+
+    for (const signature of changedSessions) {
+      // The column is free text; every row this app writes holds a provider id
+      // the registry knows, and the delta builder reads the provider off the
+      // row again anyway, so the value only labels the pending update here.
+      queuePendingWatcherUpdate('db', signature.provider as LLMProvider, signature.sessionId);
+    }
+
+    if (changedSessions.length > 0) {
+      console.log('Session rows changed outside this server', {
+        dataVersion,
+        changedSessions: changedSessions.length,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Session database change poll failed', { error: message });
+  }
+}
+
+/**
  * Handles file watcher updates and triggers provider file-level synchronization.
  */
 async function onUpdate(
@@ -275,6 +381,13 @@ export async function initializeSessionsWatcher(): Promise<void> {
     failures: initialSync.failures,
   });
 
+  // Baseline first, timer second: a poll that ran before the snapshot existed
+  // would report every indexed session as newly changed.
+  captureSessionDbBaseline();
+  sessionDbPollTimer = setInterval(pollExternalSessionDbChanges, SESSION_DB_POLL_INTERVAL_MS);
+  // Never a reason on its own to keep the process alive.
+  sessionDbPollTimer.unref?.();
+
   for (const { provider, rootPath } of PROVIDER_WATCH_PATHS) {
     try {
       await fsPromises.mkdir(rootPath, { recursive: true });
@@ -318,6 +431,13 @@ export async function initializeSessionsWatcher(): Promise<void> {
  */
 export async function closeSessionsWatcher(): Promise<void> {
   clearPendingWatcherFlushTimer();
+
+  if (sessionDbPollTimer) {
+    clearInterval(sessionDbPollTimer);
+    sessionDbPollTimer = null;
+  }
+  lastSeenDataVersion = null;
+  lastSessionRevisions = new Map();
 
   await Promise.all(
     watchers.map(async (watcher) => {

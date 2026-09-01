@@ -1,6 +1,6 @@
 import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
-import type { SessionParentRef } from '@/shared/types.js';
+import type { SessionChangeSignature, SessionParentRef } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionRow = {
@@ -318,6 +318,55 @@ export const sessionsDb = {
     }
 
     return refsByRequestedId;
+  },
+
+  /**
+   * Snapshots the sidebar-visible state of every session row.
+   *
+   * The sessions watcher keeps the previous snapshot and diffs against this
+   * one to find rows rewritten by a process other than this server — the only
+   * way to see a change that never touched a file on disk. One scan of the
+   * columns below is far cheaper than rebuilding sidebar payloads, and the
+   * watcher only ever runs it after `readDataVersion()` says an outside
+   * connection committed.
+   *
+   * Archived rows are included on purpose: archiving is itself a change the
+   * sidebar has to react to, and the delta builder is what decides an archived
+   * row produces no event.
+   */
+  getSessionChangeSignatures(): SessionChangeSignature[] {
+    const db = getConnection();
+    const rows = db
+      .prepare(
+        `SELECT session_id, provider, custom_name, model, parent_session_id, project_path, isArchived, updated_at
+         FROM sessions`
+      )
+      .all() as Array<{
+        session_id: string;
+        provider: string;
+        custom_name: string | null;
+        model: string | null;
+        parent_session_id: string | null;
+        project_path: string | null;
+        isArchived: number;
+        updated_at: string;
+      }>;
+
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      provider: row.provider,
+      // NUL-joined: no column value can contain the separator, so two
+      // distinct rows can never fold into the same revision string.
+      revision: [
+        row.provider,
+        row.custom_name,
+        row.model,
+        row.parent_session_id,
+        row.project_path,
+        row.isArchived,
+        row.updated_at,
+      ].join('\u0000'),
+    }));
   },
 
   updateSessionCustomName(sessionId: string, customName: string): void {

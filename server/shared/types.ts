@@ -671,6 +671,34 @@ export type SessionParentRef = {
   projectPath: string | null;
 };
 
+/**
+ * Fingerprint of one session row's sidebar-visible state.
+ *
+ * Produced by `sessionsDb.getSessionChangeSignatures` and consumed by the
+ * providers module's sessions watcher, which diffs two snapshots to find the
+ * rows a process other than this server rewrote.
+ *
+ * `revision` folds every column the sidebar renders from into one comparable
+ * string, so a diff is a map lookup per row and never touches a transcript.
+ * It deliberately excludes columns the sidebar ignores: a change nobody can
+ * see must not cost a broadcast.
+ *
+ * This exists because session nesting has no on-disk representation. A worker
+ * spawned outside the app gets its `custom_name`, `model` and
+ * `parent_session_id` written straight into SQLite by the spawning script,
+ * which produces no filesystem event for the watcher to react to.
+ */
+export type SessionChangeSignature = {
+  sessionId: string;
+  /**
+   * Free-text `sessions.provider` column. Always one of the ids the provider
+   * registry knows for rows this app writes, but read back as a string because
+   * nothing constrains the column itself.
+   */
+  provider: string;
+  revision: string;
+};
+
 // ---------------------------
 //----------------- GIT WORKTREE MANAGEMENT ------------
 /**

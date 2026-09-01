@@ -131,6 +131,23 @@ export function getDatabasePath(): string {
 }
 
 /**
+ * Reads SQLite's `PRAGMA data_version` for the shared connection.
+ *
+ * The counter moves only when a *different* connection commits a write, which
+ * makes it an exact "somebody outside this process changed the database"
+ * signal: everything this server writes through `getConnection()` leaves it
+ * untouched, so a watcher built on it can never trigger on its own work.
+ *
+ * Reading it costs a few microseconds and touches no table, so it is cheap
+ * enough to check on a short timer. Used by the providers module's sessions
+ * watcher to notice rows written directly into SQLite by an external session
+ * spawner — those produce no filesystem event for chokidar to see.
+ */
+export function readDataVersion(): number {
+  return getConnection().pragma('data_version', { simple: true }) as number;
+}
+
+/**
  * Closes the database connection and clears the singleton.
  * Primarily used for graceful shutdown or testing.
  */
