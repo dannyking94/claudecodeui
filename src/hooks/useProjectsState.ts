@@ -12,6 +12,10 @@ import type {
 } from '../types/app';
 
 import type { SessionActivityMap } from './useSessionProtection';
+import {
+  createProjectsRefreshCoalescer,
+  shouldRefreshProjectsAfterWebSocketEvent,
+} from './projectsRefresh';
 
 type UseProjectsStateArgs = {
   sessionId?: string;
@@ -658,6 +662,19 @@ export function useProjectsState({
   // a keyed upsert that can never clobber unrelated client state — no
   // "suppress updates while a run is active" protection is needed anymore.
   useEffect(() => {
+    const refreshCoalescer = createProjectsRefreshCoalescer(() => {
+      void refreshProjectsSilently();
+    });
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshCoalescer.request();
+      }
+    };
+    const handleOnline = () => refreshCoalescer.request();
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+
     const handleEvent = (event: ServerEvent) => {
       if (event.kind === 'loading_progress') {
         if (loadingProgressTimeoutRef.current) {
@@ -681,6 +698,10 @@ export function useProjectsState({
         ? event.sessionId
         : null;
       const viewedSessionId = selectedSessionRef.current?.id ?? sessionId ?? null;
+
+      if (shouldRefreshProjectsAfterWebSocketEvent(event.kind)) {
+        refreshCoalescer.request();
+      }
 
       if (
         eventSessionId
@@ -801,8 +822,14 @@ export function useProjectsState({
       }
     };
 
-    return subscribe(handleEvent);
-  }, [markSessionAttention, navigate, sessionId, subscribe]);
+    const unsubscribe = subscribe(handleEvent);
+    return () => {
+      unsubscribe();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+      refreshCoalescer.dispose();
+    };
+  }, [markSessionAttention, navigate, refreshProjectsSilently, sessionId, subscribe]);
 
   useEffect(() => {
     return () => {
