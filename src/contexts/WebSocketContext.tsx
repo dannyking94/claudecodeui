@@ -1,7 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 import { expireAuthSession, isAuthTokenExpired } from '../utils/api';
+
+import { shouldForceWebSocketReconnect } from './webSocketReconnect';
 
 /**
  * One frame received from the chat websocket. The server guarantees every
@@ -76,6 +79,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const [latestMessage, setLatestMessage] = useState<ServerEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hiddenSinceRef = useRef<number | null>(null);
   const { isLoading: isAuthLoading, token, user } = useAuth();
   /**
    * Token by ref: `connect` reads this at connect time instead of closing
@@ -174,6 +178,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
 
         // Attempt to reconnect after 3 seconds
         reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           if (unmountedRef.current) return; // Prevent reconnection if unmounted
           connect();
         }, 3000);
@@ -187,6 +192,68 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       console.error('Error creating WebSocket connection:', error);
     }
   }, [dispatch]); // auth state is read via tokenRef / gated by the effect above
+
+  const connectImmediately = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    const staleSocket = wsRef.current;
+    if (staleSocket) {
+      // Invalidate the old socket before dialing so its eventual close cannot
+      // schedule a second reconnect or its delayed open emit another event.
+      staleSocket.onopen = null;
+      staleSocket.onmessage = null;
+      staleSocket.onclose = null;
+      staleSocket.onerror = null;
+      staleSocket.close();
+      wsRef.current = null;
+    }
+    connect();
+  }, [connect]);
+
+  useEffect(() => {
+    if (!IS_PLATFORM && (isAuthLoading || !username)) return undefined;
+
+    const reconnectAfterWake = () => {
+      const socket = wsRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        connectImmediately();
+        return;
+      }
+
+      // The server heartbeat is 30s. After a tab has been suspended for at
+      // least one heartbeat interval, an OPEN browser socket may still be
+      // wedged, so force it through the normal onclose reconnect path.
+      if (shouldForceWebSocketReconnect(
+        hiddenSinceRef.current,
+        socket.readyState,
+        Date.now(),
+      )) {
+        socket.close();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        hiddenSinceRef.current = Date.now();
+        return;
+      }
+      reconnectAfterWake();
+      hiddenSinceRef.current = null;
+    };
+    const handleOnline = () => reconnectAfterWake();
+
+    if (document.hidden) hiddenSinceRef.current = Date.now();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+      hiddenSinceRef.current = null;
+    };
+  }, [connectImmediately, isAuthLoading, username]);
 
   const sendMessage = useCallback((message: unknown) => {
     const socket = wsRef.current;
