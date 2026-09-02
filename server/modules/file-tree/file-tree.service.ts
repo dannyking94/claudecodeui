@@ -82,6 +82,23 @@ function resolvePathInsideProject(projectRoot: string, targetPath: string): stri
   return resolvedPath;
 }
 
+function resolveReadablePath(
+  projectRoot: string,
+  targetPath: string,
+  extraReadableRoots: readonly string[],
+): string {
+  const resolvedPath = path.isAbsolute(targetPath)
+    ? path.resolve(targetPath)
+    : path.resolve(projectRoot, targetPath);
+  const readableRoots = [projectRoot, ...extraReadableRoots];
+
+  if (!readableRoots.some((root) => resolvedPath.startsWith(path.resolve(root) + path.sep))) {
+    throw createFileTreeError('Path must be under a readable root', 403, 'PATH_OUTSIDE_PROJECT');
+  }
+
+  return resolvedPath;
+}
+
 function expandWorkspacePath(workspaceRoot: string, inputPath: string): string {
   if (inputPath === '~') {
     return workspaceRoot;
@@ -153,6 +170,13 @@ function createGitignoreEntryFilter(
  */
 export function createFileTreeService(dependencies: FileTreeServiceDependencies): FileTreeServices {
   const fileSystem = dependencies.fileSystem;
+  const extraReadableRoots = dependencies.extraReadableRoots.flatMap((configuredRoot) => {
+    if (path.isAbsolute(configuredRoot)) {
+      return [path.resolve(configuredRoot)];
+    }
+    dependencies.logger.error(`Ignoring relative EXTRA_READABLE_ROOTS entry: "${configuredRoot}"`);
+    return [];
+  });
   const concurrencyLimit = Number.isFinite(dependencies.fileSystemConcurrency)
     && dependencies.fileSystemConcurrency > 0
     ? Math.floor(dependencies.fileSystemConcurrency)
@@ -356,7 +380,7 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
 
     async readTextFile(projectId, filePath) {
       const projectRoot = await resolveProjectRoot(projectId);
-      const resolvedPath = resolvePathInsideProject(projectRoot, filePath);
+      const resolvedPath = resolveReadablePath(projectRoot, filePath, extraReadableRoots);
       try {
         const content = await fileSystem.readTextFile(resolvedPath);
         return { content, path: resolvedPath };
@@ -370,7 +394,7 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
 
     async openFile(projectId, filePath) {
       const projectRoot = await resolveProjectRoot(projectId);
-      const resolvedPath = resolvePathInsideProject(projectRoot, filePath);
+      const resolvedPath = resolveReadablePath(projectRoot, filePath, extraReadableRoots);
       try {
         await fileSystem.access(resolvedPath);
       } catch {

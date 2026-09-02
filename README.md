@@ -228,6 +228,8 @@ Yes. For self-hosted, run the server on your machine and open `[yourip]:port` in
 
 Yes, for self-hosted. CloudCLI UI reads from and writes to the same `~/.claude` config that Claude Code uses natively. MCP servers you add via the UI show up in Claude Code immediately and vice versa.
 
+Set `EXTRA_READABLE_ROOTS` to a colon-separated list of absolute paths to allow read-only file viewing outside the opened project; it is empty by default.
+
 </details>
 
 ---

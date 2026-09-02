@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs, { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 
 import mime from 'mime-types';
 import multer from 'multer';
@@ -25,6 +26,10 @@ function readFileSystemConcurrency(): number {
   return Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
     ? configuredConcurrency
     : 64;
+}
+
+function readExtraReadableRoots(): string[] {
+  return (process.env.EXTRA_READABLE_ROOTS ?? '').split(path.delimiter).filter(Boolean);
 }
 
 /**
@@ -81,6 +86,7 @@ const fileTreeServices = createFileTreeService({
   workspace: fileTreeWorkspace,
   resolveMimeType: (filePath) => mime.lookup(filePath) || 'application/octet-stream',
   fileSystemConcurrency: readFileSystemConcurrency(),
+  extraReadableRoots: readExtraReadableRoots(),
   logger: fileTreeLogger,
 });
 

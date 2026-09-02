@@ -1082,6 +1082,7 @@ export type FileTreeServiceDependencies = {
   workspace: FileTreeWorkspaceGateway;
   resolveMimeType(filePath: string): string;
   fileSystemConcurrency: number;
+  extraReadableRoots: readonly string[];
   logger: FileTreeLogger;
 };
 

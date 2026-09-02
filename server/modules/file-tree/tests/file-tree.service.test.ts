@@ -57,6 +57,8 @@ function createFakeFileSystem(
 function createDependencies(
   fileSystem: FileTreeFileSystem,
   projectRoot: string,
+  extraReadableRoots: readonly string[] = [],
+  loggedErrors: string[] = [],
 ): FileTreeServiceDependencies {
   return {
     fileSystem,
@@ -69,7 +71,8 @@ function createDependencies(
     },
     resolveMimeType: () => 'text/plain',
     fileSystemConcurrency: 4,
-    logger: { error: () => undefined },
+    extraReadableRoots,
+    logger: { error: (message) => loggedErrors.push(message) },
   };
 }
 
@@ -190,6 +193,94 @@ test('readTextFile rejects traversal before invoking the filesystem adapter', as
       && error.statusCode === 403,
   );
   assert.deepEqual(readPaths, []);
+});
+
+test('reads text and binary content from an extra readable root', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const readableRoot = path.resolve('file-tree-test-readable');
+  const targetPath = path.join(readableRoot, 'preview.png');
+  const readPaths: string[] = [];
+  const fileSystem = createFakeFileSystem({
+    access: async (filePath) => { readPaths.push(filePath); },
+    readTextFile: async (filePath) => {
+      readPaths.push(filePath);
+      return 'preview';
+    },
+    createReadStream: (filePath) => {
+      readPaths.push(filePath);
+      return Readable.from(['preview']);
+    },
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [readableRoot]));
+
+  assert.deepEqual(await service.readTextFile('project-1', targetPath), {
+    content: 'preview',
+    path: targetPath,
+  });
+  await service.openFile('project-1', targetPath);
+  assert.deepEqual(readPaths, [targetPath, targetPath, targetPath]);
+});
+
+test('an extra readable root never permits writes', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const readableRoot = path.resolve('file-tree-test-readable');
+  const targetPath = path.join(readableRoot, 'notes.txt');
+  const writes: string[] = [];
+  const fileSystem = createFakeFileSystem({
+    writeTextFile: async (filePath) => { writes.push(filePath); },
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [readableRoot]));
+
+  await assert.rejects(
+    service.saveTextFile('project-1', targetPath, 'no'),
+    (error: unknown) => error instanceof AppError && error.code === 'PATH_OUTSIDE_PROJECT',
+  );
+  assert.deepEqual(writes, []);
+});
+
+test('extra readable root containment rejects a sibling with the same prefix', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const service = createFileTreeService(createDependencies(
+    createFakeFileSystem(),
+    projectRoot,
+    [path.resolve('/tmp')],
+  ));
+
+  await assert.rejects(
+    service.readTextFile('project-1', path.resolve('/tmpfoo/secret.txt')),
+    (error: unknown) => error instanceof AppError && error.code === 'PATH_OUTSIDE_PROJECT',
+  );
+});
+
+test('empty extra readable roots preserve rejection of paths outside the project', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const service = createFileTreeService(createDependencies(createFakeFileSystem(), projectRoot));
+
+  await assert.rejects(
+    service.openFile('project-1', path.resolve('/tmp/preview.png')),
+    (error: unknown) => error instanceof AppError
+      && error.code === 'PATH_OUTSIDE_PROJECT'
+      && error.statusCode === 403,
+  );
+});
+
+test('relative extra readable roots are ignored and logged once', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const loggedErrors: string[] = [];
+  const service = createFileTreeService(createDependencies(
+    createFakeFileSystem(),
+    projectRoot,
+    ['relative-root'],
+    loggedErrors,
+  ));
+
+  await assert.rejects(
+    service.readTextFile('project-1', path.resolve('relative-root/secret.txt')),
+    (error: unknown) => error instanceof AppError && error.code === 'PATH_OUTSIDE_PROJECT',
+  );
+  assert.deepEqual(loggedErrors, [
+    'Ignoring relative EXTRA_READABLE_ROOTS entry: "relative-root"',
+  ]);
 });
 
 test('createEntry performs filesystem mutation only through the injected adapter', async () => {
