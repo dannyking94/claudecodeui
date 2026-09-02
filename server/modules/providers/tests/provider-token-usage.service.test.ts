@@ -206,3 +206,60 @@ test('token usage reports SESSION_NOT_FOUND for an unknown app session id', asyn
     ),
   );
 });
+
+/**
+ * The context window is the meter's denominator, so these cases care about
+ * `total` alone: one assistant record, one model id, one expected window.
+ */
+async function readClaudeContextWindow(
+  modelId: unknown,
+  configuredContextWindow?: string,
+): Promise<number | undefined> {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'provider-token-usage-window-'));
+  const sessionFilePath = path.join(tempDirectory, 'provider-session.jsonl');
+
+  try {
+    await writeFile(sessionFilePath, JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: modelId,
+        usage: { input_tokens: 100, output_tokens: 30 },
+      },
+    }));
+
+    const service = createProviderTokenUsageService({
+      getSessionById: () => createSessionRow({ jsonl_path: sessionFilePath }),
+      getClaudeContextWindow: () => configuredContextWindow,
+    });
+
+    return (await service.getSessionTokenUsage('app-session')).total;
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+}
+
+test('an Opus 5 session reports the 1M context window it actually runs with', async () => {
+  assert.equal(await readClaudeContextWindow('claude-opus-5'), 1_000_000);
+});
+
+test('a Haiku 4.5 session reports the 200K context window, date suffix and all', async () => {
+  assert.equal(await readClaudeContextWindow('claude-haiku-4-5'), 200_000);
+  assert.equal(await readClaudeContextWindow('claude-haiku-4-5-20251001'), 200_000);
+});
+
+test('a bare family alias in the transcript still resolves a context window', async () => {
+  assert.equal(await readClaudeContextWindow('opus'), 1_000_000);
+});
+
+test('CONTEXT_WINDOW stays the operator override over the model-derived window', async () => {
+  assert.equal(await readClaudeContextWindow('claude-opus-5', '250000'), 250_000);
+});
+
+test('an unknown model id falls back to the default context window', async () => {
+  assert.equal(await readClaudeContextWindow('claude-model-from-the-future'), 160_000);
+  assert.equal(await readClaudeContextWindow(undefined), 160_000);
+});
+
+test('a synthetic assistant record never becomes the resolved context window', async () => {
+  assert.equal(await readClaudeContextWindow('<synthetic>'), 160_000);
+});

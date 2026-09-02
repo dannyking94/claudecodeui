@@ -28,6 +28,7 @@ import { claudeAgentPool } from '@/modules/providers/list/claude/claude-agent-po
 import { CLAUDE_FALLBACK_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
 import { restampClaudeTranscriptEntrypoint } from '@/modules/providers/list/claude/claude-transcript-entrypoint.provider.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
+import { resolveClaudeContextWindow } from '@/shared/claude-context-window.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -326,6 +327,27 @@ function readNumber(value) {
 }
 
 /**
+ * Names the model that produced an SDK message. Per-step messages carry it on
+ * the Claude message payload; result-level messages only key `modelUsage` by
+ * it. Without this fallback the live meter would swing between the model's real
+ * window and the default within a single run.
+ * @param {Object} sdkMessage - SDK stream message
+ * @returns {string|undefined} Model id, when the message names one
+ */
+function readSdkMessageModel(sdkMessage) {
+  const messageModel = sdkMessage.message?.model;
+  if (typeof messageModel === 'string' && messageModel) {
+    return messageModel;
+  }
+
+  if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== 'object') {
+    return undefined;
+  }
+
+  return Object.keys(sdkMessage.modelUsage)[0];
+}
+
+/**
  * Extracts token usage from SDK messages.
  * Prefers per-step `message.usage` (Claude message payload), then falls back
  * to result-level usage/modelUsage for compatibility across SDK versions.
@@ -346,7 +368,7 @@ function extractTokenBudget(sdkMessage) {
     const inputTokens = directInputTokens + cacheTokens;
     const outputTokens = readNumber(messageUsage.output_tokens ?? messageUsage.outputTokens);
     const totalUsed = inputTokens + outputTokens;
-    const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
+    const contextWindow = resolveClaudeContextWindow(process.env.CONTEXT_WINDOW, readSdkMessageModel(sdkMessage));
 
     return {
       used: totalUsed,
@@ -378,7 +400,7 @@ function extractTokenBudget(sdkMessage) {
   const inputTokens = readNumber(modelData.cumulativeInputTokens ?? modelData.inputTokens);
   const outputTokens = readNumber(modelData.cumulativeOutputTokens ?? modelData.outputTokens);
   const totalUsed = inputTokens + outputTokens;
-  const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
+  const contextWindow = resolveClaudeContextWindow(process.env.CONTEXT_WINDOW, modelKey);
 
   return {
     used: totalUsed,

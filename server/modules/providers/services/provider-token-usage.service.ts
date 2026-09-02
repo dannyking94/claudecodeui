@@ -6,6 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { resolveClaudeContextWindow } from '@/shared/claude-context-window.js';
 import type { AnyRecord } from '@/shared/types.js';
 import { AppError, extractCodexTokenBudget, getOpenCodeDatabasePath } from '@/shared/utils.js';
 
@@ -129,6 +130,7 @@ function readClaudeTokenUsage(fileContent: string, configuredContextWindow: stri
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  let modelId: unknown = null;
   const lines = fileContent.trim().split('\n');
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -150,14 +152,16 @@ function readClaudeTokenUsage(fileContent: string, configuredContextWindow: stri
       );
       inputTokens = directInputTokens + cacheReadTokens + cacheCreationTokens;
       outputTokens = readUsageNumber(usage.output_tokens ?? usage.outputTokens);
+      // The record that carries the usage also names the model that produced
+      // it, which is what the meter's denominator has to come from.
+      modelId = entry.message?.model;
       break;
     } catch {
       // Skip malformed lines without discarding usage from earlier messages.
     }
   }
 
-  const parsedContextWindow = Number.parseInt(configuredContextWindow ?? '', 10);
-  const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160_000;
+  const contextWindow = resolveClaudeContextWindow(configuredContextWindow, modelId);
   const cacheTokens = cacheReadTokens + cacheCreationTokens;
 
   return {
