@@ -8,6 +8,30 @@ const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
 
+/**
+ * Values for the `X-Auth-Error` response header on a 401.
+ *
+ * Only `SESSION_EXPIRED` means a session that was real and ran out. The other
+ * three are requests that never carried a usable token, and the client must not
+ * report them as an expired session — a browser holding a corrupted
+ * localStorage value would otherwise be told, forever, that a session it never
+ * had has expired.
+ *
+ * `X-Auth-Error` is listed in `Access-Control-Expose-Headers` (server/index.ts)
+ * so the browser can actually read it.
+ */
+const AUTH_ERROR_HEADER = 'X-Auth-Error';
+const AUTH_ERROR_CODES = {
+  /** No Authorization header and no ?token= query param. */
+  MISSING_TOKEN: 'no-token',
+  /** Signature/shape rejected by jwt.verify — the value was never a token of ours. */
+  INVALID_TOKEN: 'invalid-token',
+  /** Token verified, but the user it names is gone or deactivated. */
+  UNKNOWN_USER: 'unknown-user',
+  /** jwt.TokenExpiredError — the only genuine expiry. */
+  SESSION_EXPIRED: 'session-expired',
+};
+
 // Optional API key middleware
 const validateApiKey = (req, res, next) => {
   // Skip API key validation if not configured
@@ -49,7 +73,7 @@ const authenticateToken = async (req, res, next) => {
   }
 
   if (!token) {
-    res.setHeader('X-Auth-Error', 'invalid-token');
+    res.setHeader(AUTH_ERROR_HEADER, AUTH_ERROR_CODES.MISSING_TOKEN);
     return res.status(401).json({
       error: 'Access denied. No token provided.',
       code: 'AUTH_TOKEN_INVALID',
@@ -62,7 +86,7 @@ const authenticateToken = async (req, res, next) => {
     // Verify user still exists and is active
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
-      res.setHeader('X-Auth-Error', 'invalid-token');
+      res.setHeader(AUTH_ERROR_HEADER, AUTH_ERROR_CODES.UNKNOWN_USER);
       return res.status(401).json({
         error: 'Invalid token. User not found.',
         code: 'AUTH_TOKEN_INVALID',
@@ -83,7 +107,7 @@ const authenticateToken = async (req, res, next) => {
     next();
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
-      res.setHeader('X-Auth-Error', 'session-expired');
+      res.setHeader(AUTH_ERROR_HEADER, AUTH_ERROR_CODES.SESSION_EXPIRED);
       return res.status(401).json({
         error: 'Session expired. Please log in again.',
         code: 'AUTH_TOKEN_EXPIRED',
@@ -94,7 +118,7 @@ const authenticateToken = async (req, res, next) => {
       'Token verification failed:',
       error instanceof Error ? error.message : String(error),
     );
-    res.setHeader('X-Auth-Error', 'invalid-token');
+    res.setHeader(AUTH_ERROR_HEADER, AUTH_ERROR_CODES.INVALID_TOKEN);
     return res.status(401).json({
       error: 'Invalid token',
       code: 'AUTH_TOKEN_INVALID',
@@ -155,6 +179,8 @@ const authenticateWebSocket = (token) => {
 };
 
 export {
+  AUTH_ERROR_CODES,
+  AUTH_ERROR_HEADER,
   validateApiKey,
   authenticateToken,
   generateToken,

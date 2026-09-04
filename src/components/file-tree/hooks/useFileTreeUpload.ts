@@ -4,6 +4,7 @@ import type { DragEvent } from 'react';
 import { IS_PLATFORM } from '../../../constants/config';
 import type { Project } from '../../../types/app';
 import {
+  AUTH_ERROR_HEADER,
   expireAuthSession,
   getStoredAuthToken,
   storeAuthToken,
@@ -139,8 +140,9 @@ const uploadFormDataWithProgress = (
       if (refreshedToken) {
         storeAuthToken(refreshedToken);
       }
-      if (xhr.getResponseHeader('X-Auth-Error')) {
-        expireAuthSession();
+      const authError = xhr.getResponseHeader(AUTH_ERROR_HEADER);
+      if (authError) {
+        expireAuthSession(authError, token);
       }
 
       const payload = parseUploadResponse(xhr);

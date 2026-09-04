@@ -18,7 +18,7 @@ import type {
   AuthUserPayload,
   OnboardingStatusPayload,
 } from '../types';
-import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
+import { parseJsonSafely, resolveApiErrorMessage, resolveAuthSessionErrorMessage } from '../utils';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -123,9 +123,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setToken(nextToken);
       }
     };
-    const handleSessionExpired = () => {
+    const handleSessionExpired = (event: Event) => {
+      // The reason rides on the event so only a genuine expiry is reported as
+      // one — see AUTH_SESSION_ERROR_MESSAGES.
+      const { reason } = (event as CustomEvent<{ reason?: string } | undefined>).detail ?? {};
       clearSession();
-      setError(AUTH_ERROR_MESSAGES.sessionExpired);
+      setError(resolveAuthSessionErrorMessage(reason));
     };
 
     window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, handleTokenRefreshed);

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
-import { expireAuthSession, isAuthTokenExpired } from '../utils/api';
+import { AUTH_ERROR_REASONS, expireAuthSession, isAuthTokenExpired } from '../utils/api';
 
 import { shouldForceWebSocketReconnect } from './webSocketReconnect';
 
@@ -60,7 +60,7 @@ const buildWebSocketUrl = (token: string | null) => {
   if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws`; // Platform mode: Use same domain as the page (goes through proxy)
   if (!token) return null;
   if (isAuthTokenExpired(token)) {
-    expireAuthSession();
+    expireAuthSession(AUTH_ERROR_REASONS.SESSION_EXPIRED, token);
     return null;
   }
   return `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`; // OSS mode: Use same host:port that served the page

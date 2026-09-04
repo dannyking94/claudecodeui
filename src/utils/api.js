@@ -63,19 +63,67 @@ export const getAuthTokenRefreshDelay = (token) => {
   return Math.max(0, refreshAt - Date.now());
 };
 
-export const expireAuthSession = () => {
+// Reasons a stored token stops being usable. These mirror the `X-Auth-Error`
+// values set by server/modules/auth/auth.middleware.ts (AUTH_ERROR_CODES), and
+// they ride along on the session-expired event so the UI can say something
+// true: only SESSION_EXPIRED is a session that actually ran out.
+export const AUTH_ERROR_HEADER = 'X-Auth-Error';
+export const AUTH_ERROR_REASONS = {
+  MISSING_TOKEN: 'no-token',
+  INVALID_TOKEN: 'invalid-token',
+  UNKNOWN_USER: 'unknown-user',
+  SESSION_EXPIRED: 'session-expired',
+};
+
+/**
+ * Drops the stored token and announces why.
+ *
+ * `sentWithToken` closes a stale-401 race: a request issued before a login can
+ * land after it, and clearing unconditionally would wipe the *newer* session.
+ * Callers that know which token the request actually carried pass it here, and
+ * the session is only expired while that value is still the stored one.
+ *
+ * @param {string} [reason] one of AUTH_ERROR_REASONS
+ * @param {string | null} [sentWithToken] token the failing request was sent with
+ * @returns {boolean} whether the session was expired
+ */
+export const expireAuthSession = (
+  reason = AUTH_ERROR_REASONS.INVALID_TOKEN,
+  sentWithToken,
+) => {
+  if (sentWithToken !== undefined && localStorage.getItem('auth-token') !== sentWithToken) {
+    return false;
+  }
+
   localStorage.removeItem('auth-token');
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
+    window.dispatchEvent(new CustomEvent(AUTH_SESSION_EXPIRED_EVENT, { detail: { reason } }));
   }
+  return true;
 };
 
 export const getStoredAuthToken = () => {
   const token = localStorage.getItem('auth-token');
-  if (token && isAuthTokenExpired(token)) {
-    expireAuthSession();
+  if (!token) {
     return null;
   }
+
+  // A value that isn't even shaped like one of our JWTs can never authenticate.
+  // Without this it would be re-sent on every request forever — the server
+  // answers `jwt malformed`, and nothing ever heals the stored value.
+  // isAuthTokenExpired() can't cover it: it reads unparseable as "not expired"
+  // on purpose, because getAuthTokenRefreshDelay() needs that same null-claims
+  // path to mean "no refresh schedule".
+  if (!isValidRefreshedToken(token)) {
+    expireAuthSession(AUTH_ERROR_REASONS.INVALID_TOKEN, token);
+    return null;
+  }
+
+  if (isAuthTokenExpired(token)) {
+    expireAuthSession(AUTH_ERROR_REASONS.SESSION_EXPIRED, token);
+    return null;
+  }
+
   return token;
 };
 
@@ -124,8 +172,9 @@ export const authenticatedFetch = (url, options = {}) => {
     if (refreshedToken) {
       storeAuthToken(refreshedToken);
     }
-    if (response.headers.get('X-Auth-Error')) {
-      expireAuthSession();
+    const authError = response.headers.get(AUTH_ERROR_HEADER);
+    if (authError) {
+      expireAuthSession(authError, token);
     }
     return response;
   });
