@@ -168,6 +168,7 @@ function convertMessage(
           toolInput: typeof msg.toolInput === 'string' ? msg.toolInput : JSON.stringify(msg.toolInput ?? '', null, 2),
           toolId: msg.toolId,
           toolResult,
+          images: tr?.images,
           isSubagentContainer,
           subagentState: isSubagentContainer
             ? {
@@ -258,7 +259,7 @@ function convertMessage(
         }
 
         const content = formatToolResultContent(msg.content || '');
-        if (!content.trim()) {
+        if (!content.trim() && !msg.images?.length) {
           break;
         }
 
@@ -267,6 +268,7 @@ function convertMessage(
           content,
           timestamp: msg.timestamp,
           toolId: msg.toolId,
+          images: msg.images,
           ...sharedMetadata,
         });
         break;

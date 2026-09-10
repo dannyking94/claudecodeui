@@ -381,6 +381,14 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               </div>
             )}
 
+            {message.images && message.images.length > 0 && (
+              <ChatMessageImages
+                images={message.images}
+                projectId={selectedProject?.projectId}
+                align="start"
+              />
+            )}
+
             {(shouldShowAssistantCopyControl || !isGrouped) && (
               <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (

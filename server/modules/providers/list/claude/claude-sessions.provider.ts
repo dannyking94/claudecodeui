@@ -228,7 +228,30 @@ const INTERNAL_CONTENT_PREFIXES = [
 ] as const;
 
 function isInternalContent(content: string): boolean {
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
+  // Image coordinate companions also omit isMeta in the live SDK stream.
+  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix))
+    || /^\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]$/.test(content);
+}
+
+/** Keep image bytes out of tool output text while preserving non-image result formats. */
+function splitToolResultContent(content: unknown): { content: string | undefined; images?: Array<{ data: string }> } {
+  const images: Array<{ data: string }> = [];
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block?.type === 'image' && block.source?.type === 'base64' && typeof block.source.data === 'string') {
+        const mediaType = typeof block.source.media_type === 'string' ? block.source.media_type : 'image/png';
+        images.push({ data: `data:${mediaType};base64,${block.source.data}` });
+      }
+    }
+    if (images.length > 0) {
+      return {
+        content: content.filter((block) => block?.type === 'text' && typeof block.text === 'string')
+          .map((block) => block.text).join('\n'),
+        images,
+      };
+    }
+  }
+  return { content: typeof content === 'string' ? content : JSON.stringify(content) };
 }
 
 /**
@@ -345,7 +368,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'tool_result',
               toolId: part.tool_use_id,
-              content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
+              ...splitToolResultContent(part.content),
               isError: Boolean(part.is_error),
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult,
@@ -653,9 +676,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }
 
         msg.toolResult = {
-          content: typeof toolResult.content === 'string'
-            ? toolResult.content
-            : JSON.stringify(toolResult.content),
+          content: splitToolResultContent(toolResult.content).content,
           isError: toolResult.isError,
           toolUseResult: toolResult.toolUseResult,
         };
