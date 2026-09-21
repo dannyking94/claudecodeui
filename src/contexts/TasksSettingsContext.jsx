@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useAuth } from '../components/auth/context/AuthContext';
 import { api } from '../utils/api';
 
 const TasksSettingsContext = createContext({
@@ -20,6 +21,10 @@ export const useTasksSettings = () => {
 };
 
 export const TasksSettingsProvider = ({ children }) => {
+  // This provider mounts above ProtectedRoute, so it also renders on the login
+  // screen. Keyed by username rather than the `user` object, which is replaced
+  // on every auth check.
+  const username = useAuth().user?.username ?? null;
   const [tasksEnabled, setTasksEnabled] = useState(() => {
     // Load from localStorage on initialization
     const saved = localStorage.getItem('tasks-enabled');
@@ -36,8 +41,13 @@ export const TasksSettingsProvider = ({ children }) => {
     localStorage.setItem('tasks-enabled', JSON.stringify(tasksEnabled));
   }, [tasksEnabled]);
 
-  // Check TaskMaster installation status asynchronously on component mount
+  // Check TaskMaster installation status asynchronously once a user is signed in
   useEffect(() => {
+    // No user, no request: fetching while signed out only collects a 401.
+    if (!username) {
+      return undefined;
+    }
+
     const checkInstallation = async () => {
       try {
         const response = await api.get('/taskmaster/installation-status');
@@ -68,8 +78,9 @@ export const TasksSettingsProvider = ({ children }) => {
     };
 
     // Run check asynchronously without blocking initial render
-    setTimeout(checkInstallation, 0);
-  }, []);
+    const timer = setTimeout(checkInstallation, 0);
+    return () => clearTimeout(timer);
+  }, [username]);
 
   const toggleTasksEnabled = () => {
     setTasksEnabled(prev => !prev);

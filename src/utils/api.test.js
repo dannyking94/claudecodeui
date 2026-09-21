@@ -4,6 +4,8 @@ import test, { beforeEach } from 'node:test';
 import {
   AUTH_ERROR_REASONS,
   AUTH_SESSION_EXPIRED_EVENT,
+  authenticatedFetch,
+  clearStoredAuthToken,
   expireAuthSession,
   getStoredAuthToken,
   isAuthTokenExpired,
@@ -57,10 +59,14 @@ test('isAuthTokenExpired: a malformed/unreadable token is unaffected by the skew
 // These need browser globals; api.js only touches them at call time, so
 // installing the stubs here (before any test body runs) is enough.
 const storage = new Map();
+// Every removeItem call, including ones on an already-absent key: a redundant
+// removal leaves storage looking untouched, so the value alone can't prove a
+// code path was a no-op.
+let removeItemCalls = [];
 globalThis.localStorage = {
   getItem: (key) => (storage.has(key) ? storage.get(key) : null),
   setItem: (key, value) => { storage.set(key, String(value)); },
-  removeItem: (key) => { storage.delete(key); },
+  removeItem: (key) => { removeItemCalls.push(key); storage.delete(key); },
   clear: () => storage.clear(),
 };
 globalThis.window = new EventTarget();
@@ -81,6 +87,7 @@ const captureExpiryReasons = (run) => {
 
 beforeEach(() => {
   storage.clear();
+  removeItemCalls = [];
 });
 
 test('getStoredAuthToken: a malformed stored value is dropped instead of re-sent', () => {
@@ -158,4 +165,160 @@ test('expireAuthSession: a 401 for the token still in storage expires the sessio
 
   assert.equal(localStorage.getItem('auth-token'), null);
   assert.deepEqual(reasons, [AUTH_ERROR_REASONS.SESSION_EXPIRED]);
+});
+
+test('expireAuthSession: a no-token 401 with nothing sent and nothing stored is a no-op', () => {
+  // The reported self-sign-out: providers mounted above the login screen poll
+  // authenticated endpoints with nobody logged in. There is no session to
+  // expire, so nothing may be removed and nothing may be announced.
+  const reasons = captureExpiryReasons(() => {
+    assert.equal(expireAuthSession(AUTH_ERROR_REASONS.MISSING_TOKEN, null), false);
+  });
+
+  assert.deepEqual(removeItemCalls, []);
+  assert.deepEqual(reasons, []);
+});
+
+test('expireAuthSession: a credential-less 401 landing after a login leaves that login alone', () => {
+  localStorage.setItem('auth-token', 'fresh.login.token');
+
+  const reasons = captureExpiryReasons(() => {
+    assert.equal(expireAuthSession(AUTH_ERROR_REASONS.MISSING_TOKEN, null), false);
+  });
+
+  assert.equal(localStorage.getItem('auth-token'), 'fresh.login.token');
+  assert.deepEqual(removeItemCalls, []);
+  assert.deepEqual(reasons, []);
+});
+
+// --- authenticatedFetch ---------------------------------------------------
+// Replaces global fetch for one call. `onRequest` runs while the request is
+// "in flight", which is where a concurrent login gets simulated.
+const withStubbedFetch = async ({ status, authError, onRequest }, run) => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, headers: init.headers });
+    onRequest?.();
+    return new Response('{}', {
+      status,
+      headers: authError ? { 'X-Auth-Error': authError } : {},
+    });
+  };
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  return requests;
+};
+
+const captureExpiryReasonsAsync = async (run) => {
+  const reasons = [];
+  const listener = (event) => reasons.push(event.detail?.reason);
+  window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, listener);
+  try {
+    await run();
+  } finally {
+    window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, listener);
+  }
+  return reasons;
+};
+
+test('authenticatedFetch: a signed-out request answered 401 no-token neither clears nor announces', async () => {
+  let requests;
+  const reasons = await captureExpiryReasonsAsync(async () => {
+    requests = await withStubbedFetch(
+      { status: 401, authError: AUTH_ERROR_REASONS.MISSING_TOKEN },
+      async () => {
+        const response = await authenticatedFetch('/api/plugins');
+        assert.equal(response.status, 401);
+      },
+    );
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal('Authorization' in requests[0].headers, false);
+  assert.deepEqual(removeItemCalls, []);
+  assert.deepEqual(reasons, []);
+});
+
+test('authenticatedFetch: a signed-out 401 that lands after a login keeps the new token', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const loginToken = makeToken({ iat: now, exp: now + 3600 });
+
+  const reasons = await captureExpiryReasonsAsync(async () => {
+    await withStubbedFetch(
+      {
+        status: 401,
+        authError: AUTH_ERROR_REASONS.MISSING_TOKEN,
+        // The login completes while the credential-less request is in flight.
+        onRequest: () => localStorage.setItem('auth-token', loginToken),
+      },
+      () => authenticatedFetch('/api/taskmaster/installation-status'),
+    );
+  });
+
+  assert.equal(localStorage.getItem('auth-token'), loginToken);
+  assert.deepEqual(removeItemCalls, []);
+  assert.deepEqual(reasons, []);
+});
+
+test('authenticatedFetch: a genuine session-expired 401 for the stored token still clears and announces', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  // Unexpired by the client's clock, so it is sent; the server is the one
+  // that reports the expiry.
+  const token = makeToken({ iat: now - 60, exp: now + 3600 });
+  localStorage.setItem('auth-token', token);
+
+  let requests;
+  const reasons = await captureExpiryReasonsAsync(async () => {
+    requests = await withStubbedFetch(
+      { status: 401, authError: AUTH_ERROR_REASONS.SESSION_EXPIRED },
+      () => authenticatedFetch('/api/projects'),
+    );
+  });
+
+  assert.equal(requests[0].headers.Authorization, `Bearer ${token}`);
+  assert.equal(localStorage.getItem('auth-token'), null);
+  assert.deepEqual(reasons, [AUTH_ERROR_REASONS.SESSION_EXPIRED]);
+});
+
+// --- clearStoredAuthToken -------------------------------------------------
+
+test('clearStoredAuthToken: a stale teardown does not delete a newer token', () => {
+  // A bootstrap check for an old session fails after another login has
+  // already stored its token; the teardown only knows the old one.
+  localStorage.setItem('auth-token', 'fresh.login.token');
+
+  assert.equal(clearStoredAuthToken('stale.session.token'), false);
+
+  assert.equal(localStorage.getItem('auth-token'), 'fresh.login.token');
+  assert.deepEqual(removeItemCalls, []);
+});
+
+test('clearStoredAuthToken: a teardown by a provider holding no session leaves a stored token alone', () => {
+  localStorage.setItem('auth-token', 'fresh.login.token');
+
+  assert.equal(clearStoredAuthToken(null), false);
+
+  assert.equal(localStorage.getItem('auth-token'), 'fresh.login.token');
+  assert.deepEqual(removeItemCalls, []);
+});
+
+test('clearStoredAuthToken: tearing down the session whose token is stored removes it', () => {
+  localStorage.setItem('auth-token', 'current.session.token');
+
+  assert.equal(clearStoredAuthToken('current.session.token'), true);
+
+  assert.equal(localStorage.getItem('auth-token'), null);
+});
+
+test('clearStoredAuthToken: an explicit sign-out clears whatever is stored', () => {
+  // Logout passes no token: even one rotated in by another tab must go.
+  localStorage.setItem('auth-token', 'rotated.elsewhere.token');
+
+  assert.equal(clearStoredAuthToken(), true);
+
+  assert.equal(localStorage.getItem('auth-token'), null);
 });

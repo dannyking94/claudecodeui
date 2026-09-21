@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useAuth } from '../components/auth/context/AuthContext';
 import { authenticatedFetch } from '../utils/api';
 
 export type Plugin = {
@@ -42,6 +43,10 @@ export function usePlugins() {
 }
 
 export function PluginsProvider({ children }: { children: ReactNode }) {
+  // This provider mounts above ProtectedRoute, so it also renders on the login
+  // screen. Keyed by username rather than the `user` object, which is replaced
+  // on every auth check.
+  const username = useAuth().user?.username ?? null;
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [loading, setLoading] = useState(true);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
@@ -73,8 +78,13 @@ export function PluginsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // No user, no request: fetching while signed out only collects a 401.
+    if (!username) {
+      return;
+    }
+
     void refreshPlugins();
-  }, [refreshPlugins]);
+  }, [refreshPlugins, username]);
 
   const installPlugin = useCallback(async (url: string) => {
     try {

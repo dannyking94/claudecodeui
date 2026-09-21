@@ -4,6 +4,7 @@ import {
   api,
   AUTH_SESSION_EXPIRED_EVENT,
   AUTH_TOKEN_REFRESHED_EVENT,
+  clearStoredAuthToken,
   getAuthTokenRefreshDelay,
   isValidRefreshedToken,
   storeAuthToken,
@@ -26,10 +27,6 @@ const readStoredToken = (): string | null => localStorage.getItem(AUTH_TOKEN_STO
 
 const persistToken = (token: string) => {
   storeAuthToken(token);
-};
-
-const clearStoredToken = () => {
-  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
 };
 
 export function useAuth(): AuthContextValue {
@@ -62,15 +59,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [token]);
 
   const setSession = useCallback((nextUser: AuthUser, nextToken: string) => {
+    // Synchronously, not via the effect above: a teardown landing between this
+    // call and the next commit must already see the new session as current.
+    tokenRef.current = nextToken;
     setUser(nextUser);
     setToken(nextToken);
     persistToken(nextToken);
   }, []);
 
-  const clearSession = useCallback(() => {
+  /**
+   * Tears down the session identified by `heldToken` (default: the current
+   * one). A teardown can be stale — a bootstrap check that started before a
+   * login and failed after it — so it is ignored once the provider has moved
+   * on to another token, and storage is only cleared while it still contains
+   * `heldToken`. Unconditional teardown deleted the token a login had just
+   * written, leaving every API call unauthenticated.
+   */
+  const clearSession = useCallback((heldToken: string | null = tokenRef.current) => {
+    if (heldToken !== tokenRef.current) {
+      return;
+    }
+
+    tokenRef.current = null;
     setUser(null);
     setToken(null);
-    clearStoredToken();
+    clearStoredAuthToken(heldToken);
   }, []);
 
   const checkOnboardingStatus = useCallback(async () => {
@@ -139,6 +152,30 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
   }, [clearSession]);
 
+  // Another tab signing out empties the shared storage but not this tab's
+  // React state. Every API call here then goes out credential-less, and since
+  // a credential-less 401 no longer expires anything, nothing would bring this
+  // tab back to the login screen. `storage` fires only for changes made by
+  // other documents, so this never reacts to this tab's own writes.
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      // `key === null` is storage.clear().
+      const affectsToken = event.key === null || event.key === AUTH_TOKEN_STORAGE_KEY;
+      if (event.storageArea !== localStorage || !affectsToken) {
+        return;
+      }
+
+      if (tokenRef.current !== null && readStoredToken() === null) {
+        clearSession();
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [clearSession]);
+
   const checkAuthStatus = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -154,19 +191,22 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setNeedsSetup(false);
 
-      if (!tokenRef.current) {
+      // The token this run validates. A failure below only tears down *this*
+      // session; a login that completed meanwhile is left alone.
+      const checkedToken = tokenRef.current;
+      if (!checkedToken) {
         return;
       }
 
       const userResponse = await api.auth.user();
       if (!userResponse.ok) {
-        clearSession();
+        clearSession(checkedToken);
         return;
       }
 
       const userPayload = await parseJsonSafely<AuthUserPayload>(userResponse);
       if (!userPayload?.user) {
-        clearSession();
+        clearSession(checkedToken);
         return;
       }
 
@@ -287,8 +327,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const logout = useCallback(() => {
     // JWT logout is client-side: the server endpoint does not maintain a
     // revocation list, so clearing the session is the complete operation.
-    clearSession();
-  }, [clearSession]);
+    // Unlike a teardown this is the user's explicit intent, so the stored
+    // token goes unconditionally — even one rotated in by another tab.
+    tokenRef.current = null;
+    setUser(null);
+    setToken(null);
+    clearStoredAuthToken();
+  }, []);
 
   const contextValue = useMemo<AuthContextValue>(
     () => ({

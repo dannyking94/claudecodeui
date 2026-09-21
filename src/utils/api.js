@@ -83,6 +83,11 @@ export const AUTH_ERROR_REASONS = {
  * Callers that know which token the request actually carried pass it here, and
  * the session is only expired while that value is still the stored one.
  *
+ * `sentWithToken === null` means the request carried no credential at all. Its
+ * 401 says nothing about any session: there was never one to expire, so it is a
+ * no-op — no removal, no event. Treating it as an expiry let the app's own
+ * logged-out requests sign out the session a login was about to create.
+ *
  * @param {string} [reason] one of AUTH_ERROR_REASONS
  * @param {string | null} [sentWithToken] token the failing request was sent with
  * @returns {boolean} whether the session was expired
@@ -91,6 +96,10 @@ export const expireAuthSession = (
   reason = AUTH_ERROR_REASONS.INVALID_TOKEN,
   sentWithToken,
 ) => {
+  if (sentWithToken === null) {
+    return false;
+  }
+
   if (sentWithToken !== undefined && localStorage.getItem('auth-token') !== sentWithToken) {
     return false;
   }
@@ -99,6 +108,32 @@ export const expireAuthSession = (
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(AUTH_SESSION_EXPIRED_EVENT, { detail: { reason } }));
   }
+  return true;
+};
+
+/**
+ * Removes the stored token on behalf of a session teardown.
+ *
+ * Mirrors the `sentWithToken` guard above: a teardown only knows about the
+ * token its own session held, and by the time it runs another login (this tab
+ * or another one) may have stored a newer one. Pass the held token and the
+ * removal only happens while it is still the stored value. Omit it for an
+ * explicit sign-out, which must always clear.
+ *
+ * @param {string | null} [knownToken] token the caller's session held
+ * @returns {boolean} whether a stored token was removed
+ */
+export const clearStoredAuthToken = (knownToken) => {
+  const storedToken = localStorage.getItem('auth-token');
+  if (storedToken === null) {
+    return false;
+  }
+
+  if (knownToken !== undefined && storedToken !== knownToken) {
+    return false;
+  }
+
+  localStorage.removeItem('auth-token');
   return true;
 };
 
