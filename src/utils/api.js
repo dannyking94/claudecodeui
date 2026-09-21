@@ -204,7 +204,16 @@ export const authenticatedFetch = (url, options = {}) => {
     },
   }).then((response) => {
     const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
+    const refreshedClaims = readTokenClaims(refreshedToken);
+    // Compare with storage at response time: another response or login may
+    // already have installed a newer token while this request was in flight.
+    const storedClaims = readTokenClaims(localStorage.getItem('auth-token'));
+    if (
+      refreshedClaims &&
+      storedClaims &&
+      refreshedClaims.expiresAt > Date.now() &&
+      refreshedClaims.issuedAt > storedClaims.issuedAt
+    ) {
       storeAuthToken(refreshedToken);
     }
     const authError = response.headers.get(AUTH_ERROR_HEADER);

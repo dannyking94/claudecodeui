@@ -26,6 +26,7 @@ import {
     authenticateWebSocket,
     authRoutes,
     validateApiKey,
+    preventApiResponseStorage,
 } from './modules/auth/index.js';
 import { taskmasterRoutes } from './modules/taskmaster/index.js';
 import { commandsRoutes } from './modules/commands/index.js';
@@ -125,6 +126,8 @@ providerRuntimeService.setSpontaneousRunOpener(openSpontaneousChatRun);
 
 // Make WebSocket server available to routes
 app.locals.wss = wss;
+
+app.use('/api', preventApiResponseStorage);
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'] }));
 app.use(express.json({

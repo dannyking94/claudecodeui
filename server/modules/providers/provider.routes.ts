@@ -744,7 +744,7 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'no-store',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });

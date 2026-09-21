@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { beforeEach } from 'node:test';
 
 import {
+  AUTH_TOKEN_REFRESHED_EVENT,
   AUTH_ERROR_REASONS,
   AUTH_SESSION_EXPIRED_EVENT,
   authenticatedFetch,
@@ -194,7 +195,7 @@ test('expireAuthSession: a credential-less 401 landing after a login leaves that
 // --- authenticatedFetch ---------------------------------------------------
 // Replaces global fetch for one call. `onRequest` runs while the request is
 // "in flight", which is where a concurrent login gets simulated.
-const withStubbedFetch = async ({ status, authError, onRequest }, run) => {
+const withStubbedFetch = async ({ status, authError, refreshedToken, onRequest }, run) => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, init) => {
@@ -202,7 +203,10 @@ const withStubbedFetch = async ({ status, authError, onRequest }, run) => {
     onRequest?.();
     return new Response('{}', {
       status,
-      headers: authError ? { 'X-Auth-Error': authError } : {},
+      headers: {
+        ...(authError ? { 'X-Auth-Error': authError } : {}),
+        ...(refreshedToken ? { 'X-Refreshed-Token': refreshedToken } : {}),
+      },
     });
   };
   try {
@@ -320,5 +324,66 @@ test('clearStoredAuthToken: an explicit sign-out clears whatever is stored', () 
 
   assert.equal(clearStoredAuthToken(), true);
 
+  assert.equal(localStorage.getItem('auth-token'), null);
+});
+
+
+test('authenticatedFetch: refresh headers only replace the current token with a newer unexpired token', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const current = makeToken({ iat: now - 120, exp: now + 3600 });
+  const newer = makeToken({ iat: now - 60, exp: now + 3600 });
+  const cases = [
+    ['older', makeToken({ iat: now - 180, exp: now + 3600 }), false],
+    ['same issuance', makeToken({ iat: now - 120, exp: now + 7200 }), false],
+    ['expired', makeToken({ iat: now - 60, exp: now - 1 }), false],
+    ['malformed', 'not-a-token', false],
+    ['unreadable payload', 'header.payload.signature', false],
+    ['missing iat', makeToken({ exp: now + 3600 }), false],
+    ['missing exp', makeToken({ iat: now - 60 }), false],
+    ['nonnumeric claims', makeToken({ iat: String(now), exp: now + 3600 }), false],
+    ['newer valid', newer, true],
+  ];
+  for (const [label, refreshedToken, accepted] of cases) {
+    localStorage.setItem('auth-token', current);
+    const events = [];
+    const listener = (event) => events.push(event.detail);
+    window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, listener);
+    try {
+      await withStubbedFetch(
+        { status: 200, refreshedToken },
+        () => authenticatedFetch('/api/projects'),
+      );
+      assert.equal(localStorage.getItem('auth-token'), accepted ? newer : current, label);
+      assert.deepEqual(events, accepted ? [newer] : [], label);
+    } finally {
+      window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, listener);
+    }
+  }
+});
+
+test('authenticatedFetch: a late refresh compares against storage after a concurrent login', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const original = makeToken({ iat: now - 120, exp: now + 3600 });
+  const refreshedToken = makeToken({ iat: now - 60, exp: now + 3600 });
+  const login = makeToken({ iat: now, exp: now + 3600 });
+  localStorage.setItem('auth-token', original);
+  await withStubbedFetch(
+    { status: 200, refreshedToken, onRequest: () => localStorage.setItem('auth-token', login) },
+    () => authenticatedFetch('/api/projects'),
+  );
+  assert.equal(localStorage.getItem('auth-token'), login);
+});
+
+test('authenticatedFetch: a late refresh cannot restore a signed-out session', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  localStorage.setItem('auth-token', makeToken({ iat: now - 120, exp: now + 3600 }));
+  await withStubbedFetch(
+    {
+      status: 200,
+      refreshedToken: makeToken({ iat: now, exp: now + 3600 }),
+      onRequest: () => localStorage.removeItem('auth-token'),
+    },
+    () => authenticatedFetch('/api/projects'),
+  );
   assert.equal(localStorage.getItem('auth-token'), null);
 });

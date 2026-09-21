@@ -49,7 +49,11 @@ export function createPluginsRouter(service: ReturnType<typeof createPluginsServ
       const proxyRequest = http.request({
         hostname: '127.0.0.1', port, path: `/${wildcardPath(req)}${query}`, method: req.method, headers,
       }, (proxyResponse) => {
-        res.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+        // Upstream cache policy must not make authenticated proxy responses storable.
+        res.writeHead(proxyResponse.statusCode ?? 502, {
+          ...proxyResponse.headers,
+          'cache-control': 'no-store',
+        });
         proxyResponse.pipe(res);
       });
       proxyRequest.on('error', next);
