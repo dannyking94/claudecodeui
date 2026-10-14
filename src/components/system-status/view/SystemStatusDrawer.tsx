@@ -82,7 +82,7 @@ export default function SystemStatusDrawer({ isOpen, onClose, isMobile }: System
               </h3>
             )}
 
-            {gpuAvailable && latest
+            {latest && latest.gpus.length > 0
               ? latest.gpus.map((gpu) => (
                   <GpuCard
                     key={gpu.index}
@@ -100,7 +100,13 @@ export default function SystemStatusDrawer({ isOpen, onClose, isMobile }: System
                     t={t}
                   />
                 ))
-              : latest && <p className="text-xs text-muted-foreground">{t('systemStatus.noGpu')}</p>}
+              : latest && (
+                  <p className="text-xs text-muted-foreground">
+                    {gpuAvailable
+                      ? `${t('systemStatus.gpu')}: ${t('systemStatus.waiting')}`
+                      : t('systemStatus.noGpu')}
+                  </p>
+                )}
 
             {latest && <div className="h-px bg-border/60" />}
 

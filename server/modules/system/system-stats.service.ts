@@ -24,6 +24,8 @@ const HISTORY_LENGTH = 60;
 const HISTORY_MAX_AGE_MS = 60_000;
 /** A wedged driver must not accumulate child processes across ticks. */
 const NVIDIA_SMI_TIMEOUT_MS = 2_000;
+/** Retry detection without spawning every second on machines without NVIDIA. */
+const GPU_DETECTION_RETRY_MS = 30_000;
 
 export type SystemStatsSample = {
   timestamp: number;
@@ -53,11 +55,12 @@ let sampleInFlight = false;
 let pollGeneration = 0;
 let previousCpuTimes: CpuTimesSnapshot | null = null;
 /**
- * Tri-state on purpose: `null` means "not probed yet". Once nvidia-smi is
- * known to be missing we stop spawning it entirely rather than paying a failed
- * process launch every second on machines without an NVIDIA GPU.
+ * Tri-state on purpose: `null` means "not probed yet". A failed probe cannot
+ * establish permanent absence: the driver may be temporarily unavailable.
+ * Once detected, keep the capability true even when a reading fails.
  */
 let gpuAvailable: boolean | null = null;
+let nextGpuProbeAt = 0;
 
 function readCpuTimes(): CpuTimesSnapshot {
   let idle = 0;
@@ -127,8 +130,7 @@ function queryGpus(): Promise<GpuSample[] | null> {
       output += data.toString();
     });
 
-    // ENOENT on machines without the driver installed. Not an error worth
-    // logging every second — the caller disables GPU sampling after the first.
+    // ENOENT and driver failures share the bounded detection retry below.
     child.once('error', () => finish(null));
 
     child.once('close', (exitCode) => {
@@ -143,12 +145,18 @@ function queryGpus(): Promise<GpuSample[] | null> {
 
 async function collectSample(): Promise<SystemStatsSample> {
   const totalMemory = os.totalmem();
-  const gpus = gpuAvailable === false ? null : await queryGpus();
-
-  if (gpuAvailable === null) {
-    gpuAvailable = gpus !== null && gpus.length > 0;
-    if (!gpuAvailable) {
-      console.log('[INFO] System stats: no NVIDIA GPU detected, reporting CPU and memory only');
+  let gpus: GpuSample[] | null = null;
+  if (Date.now() >= nextGpuProbeAt) {
+    gpus = await queryGpus();
+    if (gpus && gpus.length > 0) {
+      gpuAvailable = true;
+      nextGpuProbeAt = 0;
+    } else if (gpuAvailable !== true) {
+      if (gpuAvailable === null) {
+        console.log('[INFO] System stats: NVIDIA GPU probe unavailable; retrying in 30 seconds');
+      }
+      gpuAvailable = false;
+      nextGpuProbeAt = Date.now() + GPU_DETECTION_RETRY_MS;
     }
   }
 
@@ -349,5 +357,6 @@ export function resetSystemStatsForTests(): void {
   history.length = 0;
   previousCpuTimes = null;
   gpuAvailable = null;
+  nextGpuProbeAt = 0;
   sampleInFlight = false;
 }
