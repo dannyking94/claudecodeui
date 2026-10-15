@@ -332,6 +332,15 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [];
     }
 
+    // SDK resume/acknowledgement echoes are not new turns. Older emitters
+    // omit their timestamp, and may wrap persisted string content in blocks
+    // (changing the normalized id). Rendering them would resurrect historical
+    // user messages at receive time. History owns these rows; fresh local sends
+    // already have an optimistic bubble until the transcript is refreshed.
+    if (raw.type === 'user' && raw.isReplay === true) {
+      return [];
+    }
+
     if (raw.type === 'content_block_delta' && raw.delta?.text) {
       return [createNormalizedMessage({ kind: 'stream_delta', content: raw.delta.text, sessionId, provider: PROVIDER })];
     }
