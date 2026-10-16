@@ -102,6 +102,16 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   return tools;
 }
 
+/**
+ * Transcript rows in which the CLI records the raw API request it sent, not a
+ * conversation event. `api-request-blob` rows carry `message: { role: 'user' }`
+ * holding the request's prompt text again — but with no `timestamp` and no
+ * `uuid` — so reading one as chat resurrects an earlier prompt as a new bubble
+ * dated at fetch time, with a fresh random id no dedupe can match. The prompt
+ * itself already has its own `type: 'user'` row.
+ */
+const REQUEST_CAPTURE_ROW_TYPES = new Set(['api-request', 'api-request-blob', 'api-request-shape']);
+
 async function getSessionMessages(
   sessionId: string,
   providerSessionId: string,
@@ -137,7 +147,7 @@ async function getSessionMessages(
 
       try {
         const entry = JSON.parse(line) as AnyRecord;
-        if (entry.sessionId === providerSessionId) {
+        if (entry.sessionId === providerSessionId && !REQUEST_CAPTURE_ROW_TYPES.has(entry.type)) {
           messages.push(entry);
         }
       } catch {
