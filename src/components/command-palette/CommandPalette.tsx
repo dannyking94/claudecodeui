@@ -63,7 +63,7 @@ const NAV_TABS: Array<{ id: AppTab; label: string; keywords: string }> = [
   { id: 'tasks', label: 'Go to Tasks', keywords: 'tasks taskmaster' },
 ];
 
-export default function CommandPalette({
+function CommandPalette({
   selectedProject,
   onStartNewChat,
   onOpenSettings,
@@ -371,3 +371,7 @@ function BrowseAllItem({ label, onSelect }: { label: string; onSelect: () => voi
     </CommandItem>
   );
 }
+
+// AppContent re-renders on every drawer toggle; skip those when the props
+// have not changed.
+export default React.memo(CommandPalette);

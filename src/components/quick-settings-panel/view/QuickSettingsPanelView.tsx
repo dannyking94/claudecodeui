@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
@@ -11,7 +11,7 @@ import QuickSettingsContent from './QuickSettingsContent';
 import QuickSettingsHandle from './QuickSettingsHandle';
 import QuickSettingsPanelHeader from './QuickSettingsPanelHeader';
 
-export default function QuickSettingsPanelView() {
+function QuickSettingsPanelView() {
   const [isOpen, setIsOpen] = useState(false);
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { isDarkMode } = useTheme();
@@ -88,3 +88,7 @@ export default function QuickSettingsPanelView() {
     </>
   );
 }
+
+// It takes no props, so AppContent's re-renders (drawer toggles, session
+// switches) never need to reach it.
+export default memo(QuickSettingsPanelView);

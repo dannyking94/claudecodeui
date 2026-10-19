@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
+import type { MainContentProps } from '../main-content/types/types';
 import CommandPalette from '../command-palette/CommandPalette';
 import { QuickSettingsPanel } from '../quick-settings-panel';
 import { useWebSocket } from '../../contexts/WebSocketContext';
@@ -193,6 +194,43 @@ function AppContentInner() {
   const deferredSidebarProps = useDeferredValue(sidebarSharedProps);
   const mobileSidebarProps = sidebarOpen ? sidebarSharedProps : deferredSidebarProps;
 
+  // `inert` keeps the closed drawer out of focus and the accessibility tree.
+  // Toggling it restyles every row, so it waits out the 150ms slide instead of
+  // landing in the same frames. React 18 has no `inert` prop, so it is set on
+  // the element directly.
+  const mobileDrawerPanelRef = useRef<HTMLDivElement>(null);
+  const mobileDrawerMountedRef = useRef(false);
+  useEffect(() => {
+    const panel = mobileDrawerPanelRef.current;
+    if (!panel) {
+      mobileDrawerMountedRef.current = false;
+      return undefined;
+    }
+    if (!mobileDrawerMountedRef.current) {
+      mobileDrawerMountedRef.current = true;
+      panel.inert = !sidebarOpen;
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      panel.inert = !sidebarOpen;
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [isMobile, sidebarOpen]);
+
+  // Stable callbacks so the memoized MainContent and CommandPalette skip the
+  // renders that only toggle the drawer.
+  const openSidebar = useCallback(() => setSidebarOpen(true), [setSidebarOpen]);
+  const navigateToSession = useCallback<MainContentProps['onNavigateToSession']>(
+    (targetSessionId, options) => navigate(`/session/${targetSessionId}`, { replace: Boolean(options?.replace) }),
+    [navigate],
+  );
+  const handleSessionEstablished = useCallback<MainContentProps['onSessionEstablished']>(
+    (targetSessionId, context) => registerOptimisticSession({ sessionId: targetSessionId, ...context }),
+    [registerOptimisticSession],
+  );
+  const refreshProjectsInBackground = useCallback(() => void refreshProjectsSilently(), [refreshProjectsSilently]);
+  const openDefaultSettings = useCallback(() => openSettings(), [openSettings]);
+
   // Adjust the app container to stay above the virtual keyboard on iOS Safari.
   // On Chrome for Android the layout viewport already shrinks when the keyboard opens,
   // so inset-0 adjusts automatically. On iOS the layout viewport stays full-height and
@@ -228,12 +266,31 @@ function AppContentInner() {
           <Sidebar {...sidebarSharedProps} />
         </div>
       ) : (
+        // Opened and closed through inline styles only, never by changing
+        // classes: the typography plugin's `[class~=not-prose] *` rules make
+        // Chrome restyle the whole subtree of any element whose class changes,
+        // which here is every sidebar row. Nothing inherited changes either.
+        // `visibility` used to hide the closed drawer, and flipping it started
+        // a transition on every `transition-all` row in the list; now the
+        // panel just sits off-screen, the wrapper is always click-through and
+        // the panel always clickable, and only the leaf close button hides.
         <div
-          className={`fixed inset-0 z-50 flex transition-all duration-150 ease-out ${sidebarOpen ? 'visible opacity-100' : 'invisible opacity-0'
-            }`}
+          aria-hidden={!sidebarOpen}
+          className="pointer-events-none fixed inset-0 z-50 flex transition-opacity duration-150 ease-out"
+          style={{ opacity: sidebarOpen ? 1 : 0 }}
         >
+          {/* A plain dim, not a backdrop blur: blurring the whole app behind
+              the drawer made every frame of the slide expensive on iOS. It is
+              its own layer because the touch-device rules strip the
+              background of a hovered button. */}
+          <div className="fixed inset-0 bg-black/40" />
           <button
-            className="fixed inset-0 bg-background/60 backdrop-blur-sm transition-opacity duration-150 ease-out"
+            // Hidden on its own: the touch-device rule that forces
+            // `pointer-events: auto` on every button would let it swallow taps
+            // through the closed drawer. The transition keeps it until the
+            // fade-out ends.
+            className="fixed inset-0 transition-[visibility] duration-150"
+            style={{ visibility: sidebarOpen ? 'visible' : 'hidden' }}
             onClick={(event) => {
               event.stopPropagation();
               setSidebarOpen(false);
@@ -246,8 +303,9 @@ function AppContentInner() {
             aria-label={t('versionUpdate.ariaLabels.closeSidebar')}
           />
           <div
-            className={`relative h-full w-[85vw] max-w-sm transform border-r border-border/40 bg-card transition-transform duration-150 ease-out sm:w-80 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-              }`}
+            className="pointer-events-auto relative h-full w-[85vw] max-w-sm border-r border-border/40 bg-card transition-transform duration-150 ease-out sm:w-80"
+            style={{ transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)' }}
+            ref={mobileDrawerPanelRef}
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
@@ -265,29 +323,25 @@ function AppContentInner() {
           ws={ws}
           sendMessage={sendMessage}
           isMobile={isMobile}
-          onMenuClick={() => setSidebarOpen(true)}
+          onMenuClick={openSidebar}
           isLoading={isLoadingProjects}
           onSessionProcessing={markSessionProcessing}
           onSessionIdle={markSessionIdle}
           processingSessions={processingSessions}
-          onNavigateToSession={(targetSessionId: string, options) =>
-            navigate(`/session/${targetSessionId}`, { replace: Boolean(options?.replace) })
-          }
-          onSessionEstablished={(targetSessionId, context) =>
-            registerOptimisticSession({ sessionId: targetSessionId, ...context })
-          }
+          onNavigateToSession={navigateToSession}
+          onSessionEstablished={handleSessionEstablished}
           onShowSettings={openSettings}
           externalMessageUpdate={externalMessageUpdate}
           newSessionTrigger={newSessionTrigger}
           onProjectSelect={handleProjectSelect}
-          onProjectsRefresh={() => void refreshProjectsSilently()}
+          onProjectsRefresh={refreshProjectsInBackground}
         />
       </div>
 
       <CommandPalette
         selectedProject={selectedProject}
         onStartNewChat={handleNewSession}
-        onOpenSettings={() => openSettings()}
+        onOpenSettings={openDefaultSettings}
         onShowTab={setActiveTab}
       />
 
