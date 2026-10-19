@@ -48,7 +48,6 @@ function MainContent({
   isMobile,
   onMenuClick,
   isLoading,
-  onInputFocusChange,
   onSessionProcessing,
   onSessionIdle,
   processingSessions,
@@ -179,7 +178,6 @@ function MainContent({
                 ws={ws}
                 sendMessage={sendMessage}
                 onFileOpen={handleFileOpen}
-                onInputFocusChange={onInputFocusChange}
                 onSessionProcessing={onSessionProcessing}
                 onSessionIdle={onSessionIdle}
                 processingSessions={processingSessions}

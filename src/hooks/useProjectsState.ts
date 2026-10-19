@@ -399,7 +399,6 @@ export function useProjectsState({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress | null>(null);
-  const [isInputFocused, setIsInputFocused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState('agents');
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
@@ -1208,14 +1207,12 @@ export function useProjectsState({
     sidebarOpen,
     isLoadingProjects,
     loadingProgress,
-    isInputFocused,
     showSettings,
     settingsInitialTab,
     externalMessageUpdate,
     newSessionTrigger,
     setActiveTab,
     setSidebarOpen,
-    setIsInputFocused,
     setShowSettings,
     openSettings,
     fetchProjects,

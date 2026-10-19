@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useDeferredValue, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -72,7 +72,6 @@ function AppContentInner() {
     newSessionTrigger,
     setActiveTab,
     setSidebarOpen,
-    setIsInputFocused,
     openSettings,
     refreshProjectsSilently,
     registerOptimisticSession,
@@ -184,28 +183,46 @@ function AppContentInner() {
   // the `chat_subscribed` ack carries them on session open and on reconnect,
   // so no separate permission-recovery message is needed here.
 
+  // The mobile drawer stays mounted while closed so it opens instantly, but
+  // nobody can see it then. Its props change on every send, session switch and
+  // session_upserted, and re-rendering every project row inside the tap that
+  // caused it cost hundreds of milliseconds on a phone. While closed it gets
+  // the deferred copy: the urgent render skips it (Sidebar is memoized) and
+  // React catches it up in an interruptible background render. Open, it
+  // follows the live props.
+  const deferredSidebarProps = useDeferredValue(sidebarSharedProps);
+  const mobileSidebarProps = sidebarOpen ? sidebarSharedProps : deferredSidebarProps;
+
   // Adjust the app container to stay above the virtual keyboard on iOS Safari.
   // On Chrome for Android the layout viewport already shrinks when the keyboard opens,
   // so inset-0 adjusts automatically. On iOS the layout viewport stays full-height and
   // the keyboard overlays it — we use the Visual Viewport API to track keyboard height
-  // and apply it as a CSS variable that shifts the container's bottom edge up.
+  // and shift the container's bottom edge up by it.
+  //
+  // Written straight onto the container rather than as a custom property on
+  // <html>: resize fires on every frame of the keyboard animation, and changing
+  // a variable on the root re-resolves style for the whole document each time.
+  const appContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    let lastBottom = '';
     const update = () => {
       // Only resize matters — keyboard open/close changes vv.height.
       // Do NOT listen to scroll: on iOS Safari, scrolling content changes
-      // vv.offsetTop which would make --keyboard-height fluctuate during
+      // vv.offsetTop which would make the keyboard height fluctuate during
       // normal scrolling, causing the container to bounce up and down.
-      const kb = Math.max(0, window.innerHeight - vv.height);
-      document.documentElement.style.setProperty('--keyboard-height', `${kb}px`);
+      const bottom = `${Math.max(0, window.innerHeight - vv.height)}px`;
+      if (bottom === lastBottom || !appContainerRef.current) return;
+      lastBottom = bottom;
+      appContainerRef.current.style.bottom = bottom;
     };
     vv.addEventListener('resize', update);
     return () => vv.removeEventListener('resize', update);
   }, []);
 
   return (
-    <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
+    <div ref={appContainerRef} className="fixed inset-0 flex bg-background">
       {!isMobile ? (
         <div className="h-full flex-shrink-0 border-r border-border/50">
           <Sidebar {...sidebarSharedProps} />
@@ -234,7 +251,7 @@ function AppContentInner() {
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
-            <Sidebar {...sidebarSharedProps} />
+            <Sidebar {...mobileSidebarProps} />
           </div>
         </div>
       )}
@@ -250,7 +267,6 @@ function AppContentInner() {
           isMobile={isMobile}
           onMenuClick={() => setSidebarOpen(true)}
           isLoading={isLoadingProjects}
-          onInputFocusChange={setIsInputFocused}
           onSessionProcessing={markSessionProcessing}
           onSessionIdle={markSessionIdle}
           processingSessions={processingSessions}

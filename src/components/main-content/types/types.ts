@@ -48,7 +48,6 @@ export type MainContentProps = {
   isMobile: boolean;
   onMenuClick: () => void;
   isLoading: boolean;
-  onInputFocusChange: (focused: boolean) => void;
   onSessionProcessing: MarkSessionProcessing;
   onSessionIdle: MarkSessionIdle;
   processingSessions: SessionActivityMap;

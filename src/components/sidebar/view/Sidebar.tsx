@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
@@ -315,4 +315,7 @@ function Sidebar({
   );
 }
 
-export default Sidebar;
+// AppContent re-renders on unrelated app state (tab, mobile drawer toggle);
+// the props it passes here are memoized, so those renders can skip the whole
+// project list.
+export default memo(Sidebar);

@@ -314,6 +314,12 @@ function ChatInterface({
     }
   }, [currentSessionId, provider, selectProviderModel, selectedSession?.id]);
 
+  // Stable so the memoized message pane does not re-render on every keystroke
+  // in the composer (input state lives in this component).
+  const handleSetProvider = useCallback((nextProvider: string) => {
+    setProvider(nextProvider as Provider);
+  }, [setProvider]);
+
   // Mirrors ChatComposer's own visibility check so the message pane can
   // reserve enough bottom space to keep the floating status tab from
   // overlapping the last message.
@@ -356,7 +362,7 @@ function ChatInterface({
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
-          setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
+          setProvider={handleSetProvider}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}
