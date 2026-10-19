@@ -536,8 +536,8 @@ export function useChatSessionState({
    * count no longer describes what is on screen, and a count-relative reveal
    * would uncover everything between the held start and the cap in one
    * commit. Older history is fetched only once everything already loaded is
-   * on screen — after a `refreshFromServer` the store holds the whole
-   * transcript, and the pages above the window are revealed from it.
+   * on screen — the store can hold more than the window (load-all, or rows
+   * a `refreshFromServer` tail merge kept), and those are revealed from it.
    */
   const loadOlderMessages = useCallback(
     async (container: HTMLDivElement) => {

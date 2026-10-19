@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import {
   CheckCircle,
   Circle,
@@ -14,7 +14,10 @@ import {
 import { cn } from '../../../lib/utils';
 import { useTaskMaster } from '../context/TaskMasterContext';
 import TaskDetailModal from './TaskDetailModal';
-import TaskMasterSetupModal from './modals/TaskMasterSetupModal';
+
+// The setup modal embeds a terminal (xterm); this banner sits in the chat's
+// empty state, so a static import put xterm in the entry chunk.
+const TaskMasterSetupModal = lazy(() => import('./modals/TaskMasterSetupModal'));
 
 type NextTaskBannerProps = {
   onShowAllTasks?: (() => void) | null;
@@ -60,6 +63,7 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
 
   const [showTaskDetail, setShowTaskDetail] = useState(false);
   const [showSetupModal, setShowSetupModal] = useState(false);
+  const [hasOpenedSetupModal, setHasOpenedSetupModal] = useState(false);
   const [showSetupDetails, setShowSetupDetails] = useState(false);
 
   if (!currentProject || isLoadingTasks) {
@@ -86,7 +90,10 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
             </div>
 
             <button
-              onClick={() => setShowSetupModal(true)}
+              onClick={() => {
+                setHasOpenedSetupModal(true);
+                setShowSetupModal(true);
+              }}
               className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs text-white transition-colors hover:bg-blue-700"
             >
               <Terminal className="h-3 w-3" />
@@ -111,12 +118,16 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
           )}
         </div>
 
-        <TaskMasterSetupModal
-          isOpen={showSetupModal}
-          project={currentProject}
-          onClose={() => setShowSetupModal(false)}
-          onAfterClose={handleSetupRefresh}
-        />
+        {hasOpenedSetupModal && (
+          <Suspense fallback={null}>
+            <TaskMasterSetupModal
+              isOpen={showSetupModal}
+              project={currentProject}
+              onClose={() => setShowSetupModal(false)}
+              onAfterClose={handleSetupRefresh}
+            />
+          </Suspense>
+        )}
       </>
     );
   }

@@ -1,16 +1,19 @@
-import { useMemo } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
-import Settings from '../../../settings/view/Settings';
-import VersionUpgradeModal from '../../../version-upgrade/view';
 import type { Project } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { InstallMode } from '../../../../hooks/useVersionCheck';
 import { normalizeProjectForSettings } from '../../utils/utils';
 import type { DeleteProjectConfirmation, SessionDeleteConfirmation, SettingsProject } from '../../types/types';
-import ProjectCreationWizard from '../../../project-creation-wizard';
+
+// Modals load when first opened; Settings alone pulls in MCP, skills and
+// provider-auth (with its terminal), none of which the chat needs at boot.
+const Settings = lazy(() => import('../../../settings/view/Settings'));
+const VersionUpgradeModal = lazy(() => import('../../../version-upgrade/view'));
+const ProjectCreationWizard = lazy(() => import('../../../project-creation-wizard'));
 
 type SidebarModalsProps = {
   projects: Project[];
@@ -76,8 +79,15 @@ export default function SidebarModals({
     [projects],
   );
 
+  // Kept mounted after first open: an in-progress update and its reload
+  // countdown live in the modal's state and must survive closing it.
+  const [hasOpenedVersionModal, setHasOpenedVersionModal] = useState(false);
+  useEffect(() => {
+    if (showVersionModal) setHasOpenedVersionModal(true);
+  }, [showVersionModal]);
+
   return (
-    <>
+    <Suspense fallback={null}>
       {showNewProject &&
         ReactDOM.createPortal(
           <ProjectCreationWizard
@@ -208,14 +218,16 @@ export default function SidebarModals({
           document.body,
         )}
 
-      <VersionUpgradeModal
-        isOpen={showVersionModal}
-        onClose={onCloseVersionModal}
-        releaseInfo={releaseInfo}
-        currentVersion={currentVersion}
-        latestVersion={latestVersion}
-        installMode={installMode}
-      />
-    </>
+      {hasOpenedVersionModal && (
+        <VersionUpgradeModal
+          isOpen={showVersionModal}
+          onClose={onCloseVersionModal}
+          releaseInfo={releaseInfo}
+          currentVersion={currentVersion}
+          latestVersion={latestVersion}
+          installMode={installMode}
+        />
+      )}
+    </Suspense>
   );
 }

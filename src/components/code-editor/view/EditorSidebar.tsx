@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import type { MouseEvent, MutableRefObject } from 'react';
 import type { CodeEditorFile } from '../types/types';
-import CodeEditor from './CodeEditor';
+
+// CodeMirror and its language packs (~670 KB) load the first time a file opens.
+const CodeEditor = lazy(() => import('./CodeEditor'));
 
 type EditorSidebarProps = {
   editingFile: CodeEditorFile | null;
@@ -86,15 +88,17 @@ export default function EditorSidebar({
 
   if (isMobile || poppedOut) {
     return (
-      <CodeEditor
-        file={editingFile}
-        onClose={() => {
-          setPoppedOut(false);
-          onCloseEditor();
-        }}
-        projectPath={projectPath}
-        isSidebar={false}
-      />
+      <Suspense fallback={null}>
+        <CodeEditor
+          file={editingFile}
+          onClose={() => {
+            setPoppedOut(false);
+            onCloseEditor();
+          }}
+          projectPath={projectPath}
+          isSidebar={false}
+        />
+      </Suspense>
     );
   }
 
@@ -118,15 +122,17 @@ export default function EditorSidebar({
         className={`h-full overflow-hidden border-l border-gray-200 dark:border-gray-700 ${useFlexLayout ? 'min-w-0 flex-1' : `min-w-[ flex-shrink-0${MIN_EDITOR_WIDTH}px]`}`}
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
-        <CodeEditor
-          file={editingFile}
-          onClose={onCloseEditor}
-          projectPath={projectPath}
-          isSidebar
-          isExpanded={editorExpanded}
-          onToggleExpand={onToggleEditorExpand}
-          onPopOut={() => setPoppedOut(true)}
-        />
+        <Suspense fallback={null}>
+          <CodeEditor
+            file={editingFile}
+            onClose={onCloseEditor}
+            projectPath={projectPath}
+            isSidebar
+            isExpanded={editorExpanded}
+            onToggleExpand={onToggleEditorExpand}
+            onPopOut={() => setPoppedOut(true)}
+          />
+        </Suspense>
       </div>
     </div>
   );

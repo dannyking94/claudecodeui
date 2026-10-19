@@ -12,7 +12,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { authenticatedFetch } from '../utils/api';
 import type { LLMProvider } from '../types/app';
 
-import { removeOptimisticUserEchoes } from './sessionMessageReconciliation';
+import { mergeRefreshedTail, removeOptimisticUserEchoes } from './sessionMessageReconciliation';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -384,6 +384,8 @@ function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
 const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
+/** First tail size `refreshFromServer` asks for; grows 4x until it overlaps. */
+const REFRESH_TAIL_LIMIT = 40;
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
@@ -572,7 +574,13 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * Re-fetch serverMessages from the provider sessions endpoint.
+   * Re-sync serverMessages with the persisted transcript.
+   *
+   * Fetches only the transcript's tail and splices it onto the rows already
+   * loaded (see `mergeRefreshedTail`), growing the tail until it overlaps
+   * them. This runs after every turn, on every reconnect (each iOS return
+   * from background) and on external session updates; fetching the whole
+   * transcript there cost tens of MB per call on long, image-heavy sessions.
    */
   const refreshFromServer = useCallback(async (
     sessionId: string,
@@ -580,24 +588,46 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     const fetchTicket = ++slot._fetchSeq;
     try {
-      const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
-      const response = await authenticatedFetch(url);
+      const baseUrl = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
+      let limit = REFRESH_TAIL_LIMIT;
+      let data: {
+        messages?: NormalizedMessage[];
+        total?: number;
+        hasMore?: boolean;
+        tokenUsage?: unknown;
+      } = {};
+      let merge: ReturnType<typeof mergeRefreshedTail> = null;
+      for (;;) {
+        const response = await authenticatedFetch(`${baseUrl}?limit=${limit}&offset=0`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const body = await response.json();
+        data = body?.data ?? body;
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      const data = body?.data ?? body;
+        // A later-started fetch already applied: applying this stale transcript
+        // would erase rows the user has already seen (and re-prune realtime
+        // rows against an outdated snapshot).
+        if (fetchTicket <= slot._appliedFetchSeq) {
+          return slot;
+        }
 
-      // A later-started fetch already applied: applying this stale transcript
-      // would erase rows the user has already seen (and re-prune realtime
-      // rows against an outdated snapshot).
-      if (fetchTicket <= slot._appliedFetchSeq) {
-        return;
+        const fetched: NormalizedMessage[] = data.messages || [];
+        merge = mergeRefreshedTail(slot.serverMessages, fetched);
+        // No overlap but this is the whole transcript: it is authoritative.
+        if (!merge && !data.hasMore) {
+          merge = { messages: fetched, keptOlderRows: false, droppedOlderRows: false };
+        }
+        if (merge) break;
+        limit *= 4;
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      slot.serverMessages = data.messages || [];
+      slot.serverMessages = merge.messages;
       slot.total = data.total ?? slot.serverMessages.length;
-      slot.hasMore = Boolean(data.hasMore);
+      slot.hasMore = merge.droppedOlderRows
+        || (merge.keptOlderRows ? slot.hasMore : Boolean(data.hasMore));
+      // Loaded rows are a contiguous tail of the current transcript, so older
+      // pages continue right above them.
+      slot.offset = slot.serverMessages.length;
       slot.fetchedAt = Date.now();
       if (data.tokenUsage !== undefined) {
         slot.tokenUsage = data.tokenUsage;

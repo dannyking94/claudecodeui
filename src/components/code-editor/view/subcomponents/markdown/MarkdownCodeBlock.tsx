@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { ComponentProps } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark as prismOneDark, oneLight as prismOneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { copyTextToClipboard } from '../../../../../utils/clipboard';
+import { SyntaxHighlighter, resolvePrismLanguage } from '../../../../../utils/syntaxHighlighter';
 import { useTheme } from '../../../../../contexts/ThemeContext';
 
 type MarkdownCodeBlockProps = {
@@ -58,7 +58,7 @@ export default function MarkdownCodeBlock({
       </button>
 
       <SyntaxHighlighter
-        language={language}
+        language={resolvePrismLanguage(language)}
         style={isDarkMode ? prismOneDark : prismOneLight}
         customStyle={{
           margin: 0,

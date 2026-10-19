@@ -49,19 +49,17 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          manualChunks: {
-            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-            'vendor-codemirror': [
-              '@uiw/react-codemirror',
-              '@codemirror/lang-css',
-              '@codemirror/lang-html',
-              '@codemirror/lang-javascript',
-              '@codemirror/lang-json',
-              '@codemirror/lang-markdown',
-              '@codemirror/lang-python',
-              '@codemirror/theme-one-dark'
-            ],
-            'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-clipboard', '@xterm/addon-webgl']
+          // Claim each vendor's own packages, and pin the helpers they share
+          // with the entry (react/jsx-runtime, @babel/runtime) to the
+          // always-loaded react chunk. Rollup otherwise pulls a manual chunk's
+          // unassigned dependencies into it, so the entry statically imported
+          // all of CodeMirror to get `jsx` and `_extends`.
+          manualChunks(id) {
+            if (!id.includes('/node_modules/')) return undefined
+            if (/\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler|@babel\/runtime)\//.test(id)) return 'vendor-react'
+            if (/\/node_modules\/(@codemirror|@lezer|@uiw|@replit\/codemirror-[^/]+|@marijn|style-mod|w3c-keyname|crelt)\//.test(id)) return 'vendor-codemirror'
+            if (/\/node_modules\/@xterm\//.test(id)) return 'vendor-xterm'
+            return undefined
           }
         }
       }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { NormalizedMessage } from './useSessionStore';
-import { removeOptimisticUserEchoes } from './sessionMessageReconciliation';
+import { mergeRefreshedTail, removeOptimisticUserEchoes } from './sessionMessageReconciliation';
 
 const createUserMessage = (
   id: string,
@@ -67,4 +67,37 @@ test('keeps the existing optimistic text reconciliation behavior', () => {
   });
 
   assert.deepEqual(removeOptimisticUserEchoes([persisted], [local]), []);
+});
+
+const row = (id: string): NormalizedMessage => createUserMessage(id, '2026-07-28T20:30:21.000Z');
+const ids = (messages: NormalizedMessage[]) => messages.map((message) => message.id);
+
+test('mergeRefreshedTail appends new rows and keeps older loaded rows by identity', () => {
+  const loaded = ['a', 'b', 'c', 'd'].map(row);
+  const fetched = ['c', 'd', 'e'].map(row);
+  const merged = mergeRefreshedTail(loaded, fetched);
+
+  assert.deepEqual(ids(merged!.messages), ['a', 'b', 'c', 'd', 'e']);
+  assert.equal(merged!.messages[0], loaded[0]);
+  assert.equal(merged!.messages[2], fetched[0]);
+  assert.equal(merged!.keptOlderRows, true);
+});
+
+test('mergeRefreshedTail drops fetched rows above the loaded range', () => {
+  const loaded = ['c', 'd'].map(row);
+  const merged = mergeRefreshedTail(loaded, ['a', 'b', 'c', 'd', 'e'].map(row));
+
+  assert.deepEqual(ids(merged!.messages), ['c', 'd', 'e']);
+  assert.equal(merged!.droppedOlderRows, true);
+});
+
+test('mergeRefreshedTail asks for a longer tail when there is no clean overlap', () => {
+  const loaded = ['a', 'b', 'c'].map(row);
+  assert.equal(mergeRefreshedTail(loaded, ['x', 'y'].map(row)), null);
+  assert.equal(mergeRefreshedTail(loaded, ['x', 'b', 'c'].map(row)), null);
+});
+
+test('mergeRefreshedTail takes the fetched tail as-is when nothing was loaded', () => {
+  const fetched = ['a', 'b'].map(row);
+  assert.equal(mergeRefreshedTail([], fetched)!.messages, fetched);
 });

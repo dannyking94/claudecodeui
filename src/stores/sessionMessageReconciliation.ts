@@ -107,3 +107,58 @@ export function removeOptimisticUserEchoes(
     return false;
   });
 }
+
+export type RefreshedTailMerge = {
+  messages: NormalizedMessage[];
+  /** True when the merge kept or dropped rows older than `fetchedTail`. */
+  keptOlderRows: boolean;
+  droppedOlderRows: boolean;
+};
+
+/**
+ * Splice a freshly fetched transcript tail onto the rows already loaded.
+ *
+ * Both inputs are contiguous, chronological tails of the same transcript
+ * (`loaded` from an earlier fetch). The rows from the first overlap onward are
+ * taken from `fetchedTail`, so new rows and late-attached tool results land,
+ * while older loaded rows keep their identity (the chat converter and the
+ * render-window hold key on it).
+ *
+ * Returns null when the tail does not reach back far enough to overlap the
+ * loaded rows cleanly; the caller must fetch a longer tail.
+ */
+export function mergeRefreshedTail(
+  loaded: NormalizedMessage[],
+  fetchedTail: NormalizedMessage[],
+): RefreshedTailMerge | null {
+  if (loaded.length === 0) {
+    return { messages: fetchedTail, keptOlderRows: false, droppedOlderRows: false };
+  }
+
+  const loadedIndexById = new Map<string, number>();
+  loaded.forEach((message, index) => loadedIndexById.set(message.id, index));
+
+  for (let fetchedIndex = 0; fetchedIndex < fetchedTail.length; fetchedIndex += 1) {
+    const loadedIndex = loadedIndexById.get(fetchedTail[fetchedIndex].id);
+    if (loadedIndex === undefined) continue;
+
+    if (fetchedIndex === 0) {
+      // The tail starts inside the loaded range: keep what precedes it.
+      return {
+        messages: loadedIndex === 0 ? fetchedTail : [...loaded.slice(0, loadedIndex), ...fetchedTail],
+        keptOlderRows: loadedIndex > 0,
+        droppedOlderRows: false,
+      };
+    }
+    if (loadedIndex === 0) {
+      // The tail reaches above the loaded range. Don't grow the list upward
+      // under the reader; those rows stay behind pagination.
+      return { messages: fetchedTail.slice(fetchedIndex), keptOlderRows: false, droppedOlderRows: true };
+    }
+    // Rows the loaded list never had sit between loaded rows (e.g. a reordered
+    // sidechain): only a tail covering the whole loaded range can be trusted.
+    return null;
+  }
+
+  return null;
+}

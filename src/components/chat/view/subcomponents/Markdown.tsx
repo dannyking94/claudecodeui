@@ -4,12 +4,12 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTranslation } from 'react-i18next';
 
 import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
+import { SyntaxHighlighter, resolvePrismLanguage } from '../../../../utils/syntaxHighlighter';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
 import { useTheme } from '../../../../contexts/ThemeContext';
 
@@ -137,7 +137,7 @@ const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockPro
       </button>
 
       <SyntaxHighlighter
-        language={language}
+        language={resolvePrismLanguage(language)}
         style={isDarkMode ? oneDark : oneLight}
         customStyle={{
           margin: 0,

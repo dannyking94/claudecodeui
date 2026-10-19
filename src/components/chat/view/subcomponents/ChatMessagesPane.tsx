@@ -119,6 +119,15 @@ function ChatMessagesPane({
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
+  // `selectedProject` is rebuilt on every session_upserted (lastActivity moves
+  // every few seconds while a run is live), and it is a prop of every memoized
+  // message and tool group, so each upsert re-rendered the whole window. The
+  // message tree only reads these identity/path fields.
+  const messageProject = useMemo(
+    () => selectedProject,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedProject?.projectId, selectedProject?.path, selectedProject?.fullPath],
+  );
   const groupedVisibleMessages = useMemo(
     () => groupConsecutiveTools(visibleMessages, Boolean(showThinking)),
     [visibleMessages, showThinking],
@@ -278,7 +287,7 @@ function ChatMessagesPane({
                     onGrantToolPermission={onGrantToolPermission}
                     showRawParameters={showRawParameters}
                     showThinking={showThinking}
-                    selectedProject={selectedProject}
+                    selectedProject={messageProject}
                     provider={provider}
                   />
                 );
@@ -298,7 +307,7 @@ function ChatMessagesPane({
                   onGrantToolPermission={onGrantToolPermission}
                   showRawParameters={showRawParameters}
                   showThinking={showThinking}
-                  selectedProject={selectedProject}
+                  selectedProject={messageProject}
                   provider={provider}
                 />
               );

@@ -8,7 +8,10 @@ import type {
   ProviderModelsDefinition,
 } from "../../../../types/app";
 import SessionProviderLogo from "../../../llm-logo-provider/SessionProviderLogo";
-import { NextTaskBanner } from "../../../task-master";
+// Direct path, not the task-master barrel: the barrel re-exports
+// TaskMasterPanel, whose PRD editor (CodeMirror) and setup terminal (xterm)
+// have side effects that kept them in the entry chunk.
+import NextTaskBanner from "../../../task-master/view/NextTaskBanner";
 import {
   Dialog,
   DialogTrigger,

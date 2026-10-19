@@ -46,6 +46,7 @@ import providerRoutes from './modules/providers/provider.routes.js';
 import { voiceRoutes } from './modules/voice/index.js';
 import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
 import { assetsRoutes } from './modules/assets/index.js';
+import { compressJsonResponses, createCompressedAssetHandler } from './modules/http-compression/index.js';
 import { fileTreeRoutes } from './modules/file-tree/index.js';
 import { worktreesRoutes } from './modules/worktrees/index.js';
 import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
@@ -128,6 +129,7 @@ providerRuntimeService.setSpontaneousRunOpener(openSpontaneousChatRun);
 app.locals.wss = wss;
 
 app.use('/api', preventApiResponseStorage);
+app.use('/api', compressJsonResponses);
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'] }));
 app.use(express.json({
@@ -209,6 +211,10 @@ app.use('/api/voice', authenticateToken, voiceRoutes);
 
 // Serve public files (like api-docs.html)
 app.use(express.static(path.join(APP_ROOT, 'public')));
+
+// Hashed client chunks, compressed once and served from memory; anything the
+// handler skips falls through to express.static below.
+app.use('/assets', createCompressedAssetHandler(path.join(APP_ROOT, 'dist', 'assets')));
 
 // Static files served after API routes
 // Add cache control: HTML files should not be cached, but assets can be cached

@@ -1,10 +1,21 @@
-import type { ReactNode } from 'react';
+import { Suspense, lazy } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { IS_PLATFORM } from '../../../constants/config';
 import { useAuth } from '../context/AuthContext';
-import Onboarding from '../../onboarding/view/Onboarding';
 import AuthLoadingScreen from './AuthLoadingScreen';
 import LoginForm from './LoginForm';
 import SetupForm from './SetupForm';
+
+// Shown once per install; it pulls in provider login (and its terminal).
+const LazyOnboarding = lazy(() => import('../../onboarding/view/Onboarding'));
+
+function Onboarding({ onComplete }: ComponentProps<typeof LazyOnboarding>) {
+  return (
+    <Suspense fallback={<AuthLoadingScreen />}>
+      <LazyOnboarding onComplete={onComplete} />
+    </Suspense>
+  );
+}
 
 type ProtectedRouteProps = {
   children: ReactNode;

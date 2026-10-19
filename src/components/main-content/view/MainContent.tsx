@@ -1,11 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
-import FileTree from '../../file-tree/view/FileTree';
-import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
-import GitPanel from '../../git-panel/view/GitPanel';
-import PluginTabContent from '../../plugins/view/PluginTabContent';
-import { BrowserUsePanel } from '../../browser-use';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
@@ -16,12 +11,21 @@ import { authenticatedFetch } from '../../../utils/api';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
-import { TaskMasterPanel } from '../../task-master';
-import SystemStatusDrawer from '../../system-status/view/SystemStatusDrawer';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+
+// Everything but chat loads on first use: these panels (and the terminal,
+// git, editor and task-master code behind them) were ~1 MB of the entry chunk
+// that a phone parsed on every cold start to show the chat.
+const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
+const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
+const GitPanel = lazy(() => import('../../git-panel/view/GitPanel'));
+const PluginTabContent = lazy(() => import('../../plugins/view/PluginTabContent'));
+const BrowserUsePanel = lazy(() => import('../../browser-use/view/BrowserUsePanel'));
+const TaskMasterPanel = lazy(() => import('../../task-master/view/TaskMasterPanel'));
+const SystemStatusDrawer = lazy(() => import('../../system-status/view/SystemStatusDrawer'));
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -63,6 +67,12 @@ function MainContent({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
   const [browserUseEnabled, setBrowserUseEnabled] = useState(false);
   const [isSystemStatusOpen, setIsSystemStatusOpen] = useState(false);
+  // Mount the drawer on first open and keep it, so its sample history survives
+  // closing it the same way it did when it was always mounted.
+  const [hasOpenedSystemStatus, setHasOpenedSystemStatus] = useState(false);
+  useEffect(() => {
+    if (isSystemStatusOpen) setHasOpenedSystemStatus(true);
+  }, [isSystemStatusOpen]);
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
   const shouldShowBrowserTab = browserUseEnabled;
@@ -186,6 +196,7 @@ function MainContent({
             </ErrorBoundary>
           </div>
 
+          <Suspense fallback={null}>
           {activeTab === 'files' && (
             <div className="h-full overflow-hidden">
               <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
@@ -232,6 +243,7 @@ function MainContent({
               />
             </div>
           )}
+          </Suspense>
         </div>
 
         <EditorSidebar
@@ -248,11 +260,15 @@ function MainContent({
           fillSpace={activeTab === 'files'}
         />
 
-        <SystemStatusDrawer
-          isOpen={isSystemStatusOpen}
-          onClose={() => setIsSystemStatusOpen(false)}
-          isMobile={isMobile}
-        />
+        {hasOpenedSystemStatus && (
+          <Suspense fallback={null}>
+            <SystemStatusDrawer
+              isOpen={isSystemStatusOpen}
+              onClose={() => setIsSystemStatusOpen(false)}
+              isMobile={isMobile}
+            />
+          </Suspense>
+        )}
       </div>
     </div>
   );
