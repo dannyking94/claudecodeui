@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, CornerDownRight, Edit2, Folder, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy, CornerDownRight, Edit2, Folder, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu, Badge, Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants } from '../../../../shared/view/ui';
@@ -8,7 +8,11 @@ import type { Project, ProjectSession, LLMProvider } from '../../../../types/app
 import { api } from '../../../../utils/api';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import type { SessionWithProvider } from '../../types/types';
-import { MAX_SESSION_TREE_DEPTH, NESTED_SESSION_INDENT_PX } from '../../utils/sessionTree';
+import {
+  MAX_SESSION_TREE_DEPTH,
+  NESTED_SESSION_INDENT_PX,
+  type ChildSessionFold,
+} from '../../utils/sessionTree';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
@@ -18,6 +22,9 @@ type SidebarSessionItemProps = {
   selectedSession: ProjectSession | null;
   isProcessing: boolean;
   needsAttention: boolean;
+  /** The fold over this row's inactive children, or null when it has none. */
+  childFold?: ChildSessionFold | null;
+  onToggleChildFold?: (parentSessionId: string) => void;
   currentTime: Date;
   editingSession: string | null;
   editingSessionName: string;
@@ -110,12 +117,67 @@ const resolveParentSessionLabel = (
   return `${parentName} · ${readProjectFolderName(parentProjectPath)}`;
 };
 
+/**
+ * The arrow at the left of a parent row that folds and unfolds its inactive
+ * children. It lives on the parent rather than after the children so it stays
+ * within reach however long the list beneath it grows. Pressing it never opens
+ * the session: on desktop it sits beside the row's link rather than inside it,
+ * and on mobile it stops the click before the row's own handler sees it.
+ */
+function ChildFoldToggle({
+  childFold,
+  sessionName,
+  onToggle,
+  className,
+  t,
+}: {
+  childFold: ChildSessionFold;
+  sessionName: string;
+  onToggle: () => void;
+  className?: string;
+  t: TFunction;
+}) {
+  const label = childFold.isExpanded
+    ? t('sessions.foldIdleChildren', {
+        name: sessionName,
+        defaultValue: 'Fold inactive sessions under {{name}}',
+      })
+    : t('sessions.unfoldIdleChildren', {
+        name: sessionName,
+        count: childFold.foldedCount,
+        defaultValue: 'Show {{count}} inactive sessions under {{name}}',
+      });
+  const ChevronIcon = childFold.isExpanded ? ChevronDown : ChevronRight;
+
+  return (
+    <button
+      type="button"
+      aria-expanded={childFold.isExpanded}
+      aria-label={label}
+      title={label}
+      className={cn(
+        'flex flex-shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        className,
+      )}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      <ChevronIcon className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
 export default function SidebarSessionItem({
   project,
   session,
   selectedSession,
   isProcessing,
   needsAttention,
+  childFold = null,
+  onToggleChildFold,
   currentTime,
   editingSession,
   editingSessionName,
@@ -140,6 +202,13 @@ export default function SidebarSessionItem({
   const showAttentionIndicator = needsAttention && !isSelected;
   const showRecentIndicator = !showAttentionIndicator && !isProcessing && sessionView.isActive;
   const providerLabel = PROVIDER_LABELS[session.__provider];
+  const toggleChildFold = () => onToggleChildFold?.(String(session.id));
+  const foldedChildrenLabel = childFold && !childFold.isExpanded && childFold.foldedCount > 0
+    ? t('sessions.foldedIdleChildren', {
+        count: childFold.foldedCount,
+        defaultValue: '+{{count}} inactive',
+      })
+    : null;
   const nestingDepth = Math.min(Math.max(Math.trunc(session.__depth ?? 0), 0), MAX_SESSION_TREE_DEPTH);
   const parentSessionLabel = resolveParentSessionLabel(session, project, t);
   const parentSessionTooltip = parentSessionLabel
@@ -310,6 +379,15 @@ export default function SidebarSessionItem({
           onClick={selectMobileSession}
         >
           <div className="flex items-center gap-2">
+            {childFold && (
+              <ChildFoldToggle
+                childFold={childFold}
+                sessionName={sessionView.sessionName}
+                onToggle={toggleChildFold}
+                className="-my-1.5 -ml-1.5 -mr-1 h-8 w-7 active:scale-95"
+                t={t}
+              />
+            )}
             <div
               className={cn(
                 'w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0',
@@ -339,6 +417,9 @@ export default function SidebarSessionItem({
                   <Badge variant="secondary" className="px-1 py-0 text-xs">
                     {sessionView.messageCount}
                   </Badge>
+                )}
+                {foldedChildrenLabel && (
+                  <span className="flex-shrink-0 text-[10px] text-muted-foreground">{foldedChildrenLabel}</span>
                 )}
                 {parentSessionLabel && (
                   <span
@@ -458,6 +539,7 @@ export default function SidebarSessionItem({
           className={cn(
             buttonVariants({ variant: 'ghost' }),
             'h-auto w-full justify-start rounded-md border bg-card p-2 pr-11 text-left font-normal transition-all duration-150',
+            childFold && 'pl-8',
             isSelected ? 'border-primary/20 bg-primary/5' : 'border-border/30',
             !isSelected && isProcessing
               ? 'border-border/60 bg-muted/20 hover:bg-muted/25'
@@ -511,6 +593,9 @@ export default function SidebarSessionItem({
               </div>
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                 {sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>}
+                {foldedChildrenLabel && (
+                  <span className="flex-shrink-0 text-[10px] text-muted-foreground">{foldedChildrenLabel}</span>
+                )}
                 {parentSessionLabel && (
                   <span
                     className="flex min-w-0 items-center gap-0.5 text-[10px] text-muted-foreground"
@@ -533,6 +618,16 @@ export default function SidebarSessionItem({
             </div>
           </div>
         </a>
+
+        {childFold && (
+          <ChildFoldToggle
+            childFold={childFold}
+            sessionName={sessionView.sessionName}
+            onToggle={toggleChildFold}
+            className="absolute left-1.5 top-1/2 h-7 w-6 -translate-y-1/2"
+            t={t}
+          />
+        )}
 
         <div
           ref={editingContainerRef}

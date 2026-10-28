@@ -96,6 +96,42 @@ export const writeLastVisitedSessionId = (projectId: string, sessionId: string):
   }
 };
 
+/**
+ * Parent sessions whose inactive children the user unfolded. Kept in
+ * sessionStorage, so the fold survives a reload of the tab but a new tab
+ * starts with everything at rest folded away again.
+ */
+const EXPANDED_PARENT_SESSIONS_STORAGE_KEY = 'sidebarExpandedParentSessions';
+
+export const readExpandedParentSessionIds = (): Set<string> => {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(EXPANDED_PARENT_SESSIONS_STORAGE_KEY) ?? '[]') as unknown;
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+};
+
+/**
+ * Records one parent as unfolded or folded. Read-modify-write against storage
+ * rather than writing a caller's whole set, because every project list holds
+ * its own copy and must not overwrite another project's parents.
+ */
+export const writeExpandedParentSessionId = (parentSessionId: string, isExpanded: boolean): void => {
+  try {
+    const expandedIds = readExpandedParentSessionIds();
+    if (isExpanded) {
+      expandedIds.add(parentSessionId);
+    } else {
+      expandedIds.delete(parentSessionId);
+    }
+
+    sessionStorage.setItem(EXPANDED_PARENT_SESSIONS_STORAGE_KEY, JSON.stringify([...expandedIds]));
+  } catch {
+    // The fold still works for this render when storage is unavailable.
+  }
+};
+
 const getCreatedTimestamp = (session: SessionWithProvider): string => {
   return String(session.createdAt || session.created_at || '');
 };

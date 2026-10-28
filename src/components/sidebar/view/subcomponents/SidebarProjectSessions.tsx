@@ -7,13 +7,15 @@ import type { SessionActivityMap } from '../../../../hooks/useSessionProtection'
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import {
-  MAX_SESSION_TREE_DEPTH,
-  NESTED_SESSION_INDENT_PX,
   countSessionSubtreeRows,
   foldChildSessions,
   type SessionTreeRow,
 } from '../../utils/sessionTree';
-import { RECENT_ACTIVITY_WINDOW_MS } from '../../utils/utils';
+import {
+  RECENT_ACTIVITY_WINDOW_MS,
+  readExpandedParentSessionIds,
+  writeExpandedParentSessionId,
+} from '../../utils/utils';
 
 import SidebarSessionItem from './SidebarSessionItem';
 
@@ -73,10 +75,6 @@ const findFoldCutIndex = (rows: SessionTreeRow[]): number => {
   return cutIndex;
 };
 
-/** Matches the indentation `SidebarSessionItem` gives a row at the same depth. */
-const readRowIndentPx = (depth: number): number =>
-  Math.min(Math.max(Math.trunc(depth), 0), MAX_SESSION_TREE_DEPTH) * NESTED_SESSION_INDENT_PX;
-
 /**
  * Dots on the project's fold toggle, standing in for the sessions it is
  * holding: amber for anything blocked on the user, green for anything still
@@ -85,8 +83,8 @@ const readRowIndentPx = (depth: number): number =>
  * nothing at all.
  *
  * Only this fold needs them. It cuts by top-level session, so a whole branch
- * with a worker mid-turn inside it can fall past the cut. The child toggles
- * cannot: a running or blocked child is never one of the rows they fold away.
+ * with a worker mid-turn inside it can fall past the cut. The arrows on parent
+ * rows cannot: a running or blocked child is never one of the rows they fold.
  */
 function FoldedSessionIndicators({
   foldedLiveCount,
@@ -165,17 +163,23 @@ export default function SidebarProjectSessions({
   t,
 }: SidebarProjectSessionsProps) {
   const [isShowingAllSessions, setIsShowingAllSessions] = useState(false);
-  const [expandedParentIds, setExpandedParentIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [expandedParentIds, setExpandedParentIds] = useState<ReadonlySet<string>>(
+    readExpandedParentSessionIds,
+  );
 
   if (!isExpanded) {
     return null;
   }
 
   const toggleFoldedChildren = (parentSessionId: string) => {
+    const isExpanding = !expandedParentIds.has(parentSessionId);
+    writeExpandedParentSessionId(parentSessionId, isExpanding);
     setExpandedParentIds((previous) => {
       const next = new Set(previous);
-      if (!next.delete(parentSessionId)) {
+      if (isExpanding) {
         next.add(parentSessionId);
+      } else {
+        next.delete(parentSessionId);
       }
 
       return next;
@@ -213,37 +217,35 @@ export default function SidebarProjectSessions({
   // apart from its subtree, indentation would only read as a child of whatever
   // row the fold happened to end on.
   const selectedIndex = selectedSession
-    ? rows.findIndex((row) => row.kind === 'session' && row.session.id === selectedSession.id)
+    ? rows.findIndex((row) => row.session.id === selectedSession.id)
     : -1;
   const selectedRow = selectedIndex >= 0 ? rows[selectedIndex] : null;
   const visibleRows: SessionTreeRow[] = !isFolded
     ? rows
-    : selectedRow?.kind === 'session' && selectedIndex >= foldCutIndex
+    : selectedRow && selectedIndex >= foldCutIndex
       ? [
           ...rows.slice(0, foldCutIndex),
-          { ...selectedRow, __depth: 0, session: { ...selectedRow.session, __depth: 0 } },
+          // Its children stay past the cut, so it offers no arrow to show them.
+          { __depth: 0, session: { ...selectedRow.session, __depth: 0 }, childFold: null },
         ]
       : rows.slice(0, foldCutIndex);
 
   // Everything the user cannot currently see under this project, counted once:
-  // the rows this fold took off screen, plus the children each toggle down
-  // there is holding. A toggle above the cut is on screen and speaks for
-  // itself.
-  const foldedRows = isFolded
-    ? rows.slice(foldCutIndex).filter((_, offset) => foldCutIndex + offset !== selectedIndex)
-    : [];
-  const foldedSessionCount = foldedRows.reduce(
-    (total, row) => total + (row.kind === 'session' ? 1 : row.foldedCount),
+  // the rows this fold took off screen, plus the children each arrow down there
+  // is holding. An arrow above the cut is on screen and speaks for itself.
+  const rowsPastCut = isFolded ? rows.slice(foldCutIndex) : [];
+  const foldedRows = rowsPastCut.filter((_, offset) => foldCutIndex + offset !== selectedIndex);
+  const foldedSessionCount = foldedRows.length + rowsPastCut.reduce(
+    (total, row) => total + (row.childFold?.foldedCount ?? 0),
     0,
   );
   // Folding must not swallow the green/amber dots: a session that is running or
   // waiting on the user still reports itself through the toggle. Only the rows
-  // this fold took off screen are counted — a child toggle down there is
-  // holding nothing live, since a working child is never what a child fold
-  // gives up.
+  // this fold took off screen are counted — an arrow down there is holding
+  // nothing live, since a working child is never what a child fold gives up.
   const foldedLiveCount = foldedRows.reduce(
     (total, row) => total + (
-      row.kind === 'session' && liveSessionIds.has(row.session.id) ? 1 : 0
+      liveSessionIds.has(row.session.id) ? 1 : 0
     ),
     0,
   );
@@ -251,7 +253,7 @@ export default function SidebarProjectSessions({
   // than merely live, because the two ask different things of the user.
   const foldedWaitingCount = foldedRows.reduce(
     (total, row) => total + (
-      row.kind === 'session' && attentionSessionIds.has(row.session.id) ? 1 : 0
+      attentionSessionIds.has(row.session.id) ? 1 : 0
     ),
     0,
   );
@@ -289,7 +291,7 @@ export default function SidebarProjectSessions({
         </div>
       ) : (
         <>
-          {visibleRows.map((row) => (row.kind === 'session' ? (
+          {visibleRows.map((row) => (
             <SidebarSessionItem
               key={row.session.id}
               project={project}
@@ -297,6 +299,8 @@ export default function SidebarProjectSessions({
               selectedSession={selectedSession}
               isProcessing={activeSessions.has(row.session.id)}
               needsAttention={attentionSessionIds.has(row.session.id)}
+              childFold={row.childFold}
+              onToggleChildFold={toggleFoldedChildren}
               currentTime={currentTime}
               editingSession={editingSession}
               editingSessionName={editingSessionName}
@@ -309,42 +313,7 @@ export default function SidebarProjectSessions({
               onDeleteSession={onDeleteSession}
               t={t}
             />
-          ) : (
-            // Sits where the children it stands in for would be, indented and
-            // on the same tree line, so the count reads as part of that branch.
-            <div
-              key={`folded-children:${row.parentSessionId}`}
-              className="relative"
-              style={{ marginLeft: readRowIndentPx(row.__depth) }}
-            >
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute -left-2 top-0 h-full w-px bg-border"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-full justify-start gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => toggleFoldedChildren(row.parentSessionId)}
-                aria-expanded={row.foldedCount === 0}
-              >
-                {row.foldedCount > 0 ? (
-                  <>
-                    <ChevronDown className="h-3 w-3" />
-                    {t('sessions.showAllSessions', {
-                      hidden: row.foldedCount,
-                      defaultValue: 'Show {{hidden}} more',
-                    })}
-                  </>
-                ) : (
-                  <>
-                    <ChevronUp className="h-3 w-3" />
-                    {t('sessions.showFewerSessions', { defaultValue: 'Show less' })}
-                  </>
-                )}
-              </Button>
-            </div>
-          )))}
+          ))}
 
           {isFoldable && (
             <Button
