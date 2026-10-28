@@ -56,7 +56,7 @@ test('a foreign claude attached with --session-id holds the session, named by it
   ]);
   try {
     const holder = await host.find(HELD_ID, new Map([[503742, 'dk-ai-0']]));
-    assert.deepEqual(holder, { pid: 503742, tmuxSession: 'dk-ai-0', registryName: null });
+    assert.deepEqual(holder, { pid: 503742, tmuxSession: 'dk-ai-0', registryName: null, inbox: null });
     assert.match(describeClaudeSessionHold(holder!), /running elsewhere \(pid 503742, tmux session dk-ai-0\)/);
     assert.match(describeClaudeSessionHold(holder!), /send it via Discord DM instead/);
   } finally {
@@ -137,9 +137,25 @@ test('a registered secretary is held even with no process attached', async () =>
   });
   try {
     const holder = await host.find(HELD_ID);
-    assert.deepEqual(holder, { pid: null, tmuxSession: null, registryName: 'dk-ai-0' });
+    assert.deepEqual(holder, { pid: null, tmuxSession: null, registryName: 'dk-ai-0', inbox: null });
     assert.match(describeClaudeSessionHold(holder!), /registered secretary dk-ai-0/);
     assert.equal(await host.find('unregistered-id'), null);
+  } finally {
+    await host.cleanup();
+  }
+});
+
+test('a registered secretary reports its inbox socket, and an inbox failure leads the refusal', async () => {
+  const host = await createHost([SERVER], {
+    instances: { 'dk-ai-0': { session_id: HELD_ID, inbox: '/run/dk-ai-0/local-inbox.sock' } },
+  });
+  try {
+    const holder = await host.find(HELD_ID);
+    assert.equal(holder?.inbox, '/run/dk-ai-0/local-inbox.sock');
+    assert.match(
+      describeClaudeSessionHold(holder!, 'the inbox socket is unreachable (ENOENT)'),
+      /^Could not deliver to the dk-ai-0 secretary's inbox: the inbox socket is unreachable \(ENOENT\)\. This session is running elsewhere.*Discord DM/,
+    );
   } finally {
     await host.cleanup();
   }

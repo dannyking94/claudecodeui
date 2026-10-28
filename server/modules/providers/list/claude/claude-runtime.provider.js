@@ -31,6 +31,7 @@ import {
   describeClaudeSessionHold,
   findClaudeSessionHolder,
 } from '@/modules/providers/list/claude/claude-session-hold.provider.js';
+import { deliverToSecretaryInbox } from '@/modules/providers/list/claude/claude-secretary-inbox.provider.js';
 import { restampClaudeTranscriptEntrypoint } from '@/modules/providers/list/claude/claude-transcript-entrypoint.provider.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import { resolveClaudeContextWindow } from '@/shared/claude-context-window.js';
@@ -71,6 +72,7 @@ let spontaneousRunOpener = null;
  */
 const runtimeDependencies = {
   findSessionHolder: findClaudeSessionHolder,
+  deliverToSecretaryInbox,
   createQuery: query,
 };
 
@@ -85,15 +87,21 @@ export function overrideClaudeRuntimeDependencies(overrides) {
 }
 
 /**
- * Refuses a resume when another claude this server does not own is attached
- * to the session (or it is a registered secretary). Resuming would start a
+ * Keeps a turn off a session another claude this server does not own is
+ * attached to (or that is a registered secretary). Resuming would start a
  * second writer on one transcript — a copy without the original's chat tools.
  *
- * Sends the row its error and terminal `complete` itself and returns true when
- * the run must stop. Nothing is spawned; the transcript view keeps working
- * because the session watcher re-syncs the jsonl the real holder writes.
+ * A registered secretary with a local inbox gets the message posted into its
+ * chat bridge instead, as an owner message; the row shows it as delivered and
+ * the answer arrives in the transcript this row already renders. Anything else
+ * — no inbox, an unreachable one, an inbox error, or a holder that is not a
+ * registered secretary — is refused with the reason.
+ *
+ * Sends the row its frames and terminal `complete` itself and returns true when
+ * the run must stop. Nothing is spawned either way; the transcript view keeps
+ * working because the session watcher re-syncs the jsonl the real holder writes.
  */
-async function refuseIfHeldElsewhere(providerSessionId, sessionId, ws) {
+async function refuseIfHeldElsewhere(providerSessionId, sessionId, ws, command, options = {}) {
   if (!providerSessionId) {
     return false;
   }
@@ -101,15 +109,49 @@ async function refuseIfHeldElsewhere(providerSessionId, sessionId, ws) {
   if (!holder) {
     return false;
   }
+  const rowSessionId = sessionId || providerSessionId;
+
+  let inboxFailure;
+  if (holder.registryName) {
+    const text = typeof command === 'string' ? command.trim() : '';
+    if (!holder.inbox) {
+      inboxFailure = 'it publishes no inbox socket in the registry';
+    } else if (!text) {
+      inboxFailure = 'the inbox carries text only, and this message has none';
+    } else {
+      const delivery = await runtimeDependencies.deliverToSecretaryInbox(holder.inbox, text);
+      if (delivery.ok) {
+        console.log(
+          `[Claude SDK] Delivered a message for ${providerSessionId} to secretary ${holder.registryName}'s inbox ` +
+          `(id ${delivery.id ?? 'none'}, room ${delivery.room ?? 'unknown'}).`,
+        );
+        const attachmentCount = (options.images?.length || 0) + (options.files?.length || 0);
+        const attachmentNote = attachmentCount > 0
+          ? ` ${attachmentCount} attachment(s) were not forwarded — the inbox carries text only.`
+          : '';
+        ws.send(createNormalizedMessage({
+          kind: 'task_notification',
+          status: 'completed',
+          summary: `Delivered to the ${holder.registryName} secretary — its reply will appear in this transcript.`
+            + attachmentNote,
+          sessionId: rowSessionId,
+          provider: 'claude',
+        }));
+        ws.send(createCompleteMessage({ provider: 'claude', sessionId: rowSessionId, exitCode: 0 }));
+        return true;
+      }
+      inboxFailure = delivery.reason;
+    }
+  }
 
   console.warn(
     `[Claude SDK] Not resuming ${providerSessionId}: held elsewhere ` +
-    `(pid ${holder.pid ?? 'none'}, tmux ${holder.tmuxSession ?? 'unknown'}, registry ${holder.registryName ?? 'none'}).`,
+    `(pid ${holder.pid ?? 'none'}, tmux ${holder.tmuxSession ?? 'unknown'}, registry ${holder.registryName ?? 'none'})`
+    + (inboxFailure ? `; inbox delivery failed: ${inboxFailure}.` : '.'),
   );
-  const rowSessionId = sessionId || providerSessionId;
   ws.send(createNormalizedMessage({
     kind: 'error',
-    content: describeClaudeSessionHold(holder),
+    content: describeClaudeSessionHold(holder, inboxFailure),
     errorCode: CLAUDE_SESSION_HELD_ERROR_CODE,
     holder,
     sessionId: rowSessionId,
@@ -719,7 +761,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   const providerSessionId = context.resolveProviderSessionId(sessionId);
 
   // Before anything can spawn — pooled or one-shot, new agent or reused one.
-  if (await refuseIfHeldElsewhere(providerSessionId, sessionId, ws)) {
+  if (await refuseIfHeldElsewhere(providerSessionId, sessionId, ws, command, options)) {
     return;
   }
 

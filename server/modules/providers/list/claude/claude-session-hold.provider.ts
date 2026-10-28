@@ -34,12 +34,14 @@ const MAX_ANCESTOR_DEPTH = 64;
  * Who holds a session, as reported to the user in the blocked row.
  *
  * `pid` is null only for a registry-only hold (the registered secretary has no
- * process attached right now, e.g. mid-restart).
+ * process attached right now, e.g. mid-restart). `inbox` is the registered
+ * secretary's local-inbox socket path, null when it has none or is not one.
  */
 export type ClaudeSessionHolder = {
   pid: number | null;
   tmuxSession: string | null;
   registryName: string | null;
+  inbox: string | null;
 };
 
 type SessionHoldDependencies = {
@@ -167,12 +169,15 @@ async function ancestry(procRoot: string, pid: number): Promise<number[]> {
 }
 
 /**
- * The registered secretary name for a session id, or null.
+ * The registered secretary (name and inbox socket) for a session id, or null.
  *
  * A missing or unreadable registry is the ordinary state on most hosts and
  * means "rely on the process check only", never an error.
  */
-async function findRegisteredName(registryPath: string, sessionId: string): Promise<string | null> {
+async function findRegisteredSecretary(
+  registryPath: string,
+  sessionId: string,
+): Promise<{ name: string; inbox: string | null } | null> {
   try {
     const registry = JSON.parse(await readFile(registryPath, 'utf8')) as unknown;
     const instances = (registry as { instances?: unknown })?.instances;
@@ -180,8 +185,9 @@ async function findRegisteredName(registryPath: string, sessionId: string): Prom
       return null;
     }
     for (const [name, entry] of Object.entries(instances as Record<string, unknown>)) {
-      if ((entry as { session_id?: unknown })?.session_id === sessionId) {
-        return name;
+      const fields = entry as { session_id?: unknown; inbox?: unknown } | null;
+      if (fields?.session_id === sessionId) {
+        return { name, inbox: typeof fields.inbox === 'string' && fields.inbox ? fields.inbox : null };
       }
     }
   } catch {
@@ -247,12 +253,12 @@ export async function findClaudeSessionHolder(
   }
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
 
-  const [foreign, registryName] = await Promise.all([
+  const [foreign, registered] = await Promise.all([
     findForeignProcess(sessionId, dependencies),
-    findRegisteredName(dependencies.registryPath, sessionId),
+    findRegisteredSecretary(dependencies.registryPath, sessionId),
   ]);
 
-  if (!foreign && !registryName) {
+  if (!foreign && !registered) {
     return null;
   }
 
@@ -266,19 +272,29 @@ export async function findClaudeSessionHolder(
     }
   }
 
-  return { pid: foreign?.pid ?? null, tmuxSession, registryName };
+  return {
+    pid: foreign?.pid ?? null,
+    tmuxSession,
+    registryName: registered?.name ?? null,
+    inbox: registered?.inbox ?? null,
+  };
 }
 
 /**
  * The sentence the blocked row shows. Consumed by the Claude runtime (chat
  * error) and the shell websocket (terminal notice) so both say the same thing.
+ * `inboxFailure` is set by the runtime when it tried the secretary's local
+ * inbox first and could not deliver; it leads the sentence so the row says why.
  */
-export function describeClaudeSessionHold(holder: ClaudeSessionHolder): string {
+export function describeClaudeSessionHold(holder: ClaudeSessionHolder, inboxFailure?: string): string {
   const where = holder.pid !== null
     ? [`pid ${holder.pid}`, holder.tmuxSession ? `tmux session ${holder.tmuxSession}` : null,
       holder.registryName ? `secretary ${holder.registryName}` : null]
     : [`registered secretary ${holder.registryName}, restarting or briefly stopped`];
-  return `This session is running elsewhere (${where.filter(Boolean).join(', ')}). `
+  const failure = inboxFailure
+    ? `Could not deliver to the ${holder.registryName ?? 'secretary'} secretary's inbox: ${inboxFailure}. `
+    : '';
+  return `${failure}This session is running elsewhere (${where.filter(Boolean).join(', ')}). `
     + 'Messages typed here would start a second copy without its chat tools — '
     + 'send it via Discord DM instead.';
 }
