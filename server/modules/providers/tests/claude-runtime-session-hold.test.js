@@ -217,16 +217,24 @@ function registeredSecretary(inbox) {
 test('a message for a registered secretary is delivered to its inbox and spawns nothing', async () => {
   const inbox = await startFakeInbox(() => ({ ok: true, id: 'm-1', room: 'local/owner' }));
   const spawns = [];
+  const deliveriesNoted = [];
   restoreDependencies = overrideClaudeRuntimeDependencies({
     createQuery: createAnsweringQuery(spawns),
     findSessionHolder: async () => registeredSecretary(inbox.socketPath),
+    noteSecretaryDelivery: async (...ids) => {
+      deliveriesNoted.push(ids);
+    },
   });
   const writer = createWriter();
   try {
     await queryClaudeSDK('  do X  ', { sessionId: APP_SESSION_ID }, writer, createContext());
+    await new Promise((resolve) => setImmediate(resolve));
   } finally {
     await inbox.close();
   }
+
+  // The row's activity indicator is told the secretary is now working.
+  assert.deepEqual(deliveriesNoted, [[PROVIDER_SESSION_ID, APP_SESSION_ID]]);
 
   assert.equal(spawns.length, 0, 'no claude process was started');
   assert.equal(claudeAgentPool.get(APP_SESSION_ID), undefined, 'the pool gained no agent');

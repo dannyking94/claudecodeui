@@ -31,6 +31,7 @@ import {
   describeClaudeSessionHold,
   findClaudeSessionHolder,
 } from '@/modules/providers/list/claude/claude-session-hold.provider.js';
+import { claudeSecretaryActivity } from '@/modules/providers/list/claude/claude-secretary-activity.provider.js';
 import { deliverToSecretaryInbox } from '@/modules/providers/list/claude/claude-secretary-inbox.provider.js';
 import { restampClaudeTranscriptEntrypoint } from '@/modules/providers/list/claude/claude-transcript-entrypoint.provider.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
@@ -73,6 +74,8 @@ let spontaneousRunOpener = null;
 const runtimeDependencies = {
   findSessionHolder: findClaudeSessionHolder,
   deliverToSecretaryInbox,
+  noteSecretaryDelivery: (providerSessionId, appSessionId) =>
+    claudeSecretaryActivity.noteDelivered(providerSessionId, appSessionId),
   createQuery: query,
 };
 
@@ -138,6 +141,12 @@ async function refuseIfHeldElsewhere(providerSessionId, sessionId, ws, command, 
           provider: 'claude',
         }));
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: rowSessionId, exitCode: 0 }));
+        // After `complete`, which cleared the row's indicator: the secretary is
+        // about to work on this, so the row shows it working from now rather
+        // than from its first transcript write.
+        void Promise.resolve()
+          .then(() => runtimeDependencies.noteSecretaryDelivery(providerSessionId, rowSessionId))
+          .catch((error) => console.warn(`[Claude SDK] Secretary activity update failed: ${error?.message ?? error}`));
         return true;
       }
       inboxFailure = delivery.reason;

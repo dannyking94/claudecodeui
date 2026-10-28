@@ -5,6 +5,7 @@ import { promises as fsPromises } from 'node:fs';
 import chokidar, { type FSWatcher } from 'chokidar';
 
 import { projectsDb, readDataVersion, sessionsDb } from '@/modules/database/index.js';
+import { claudeSecretaryActivity } from '@/modules/providers/list/claude/claude-secretary-activity.provider.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { LLMProvider, SessionChangeSignature } from '@/shared/types.js';
@@ -348,6 +349,15 @@ async function onUpdate(
     return;
   }
 
+  if (provider === 'claude') {
+    // A secretary's row has no cloudcli run to report as processing; its
+    // transcript is what says whether it is mid-turn.
+    void claudeSecretaryActivity.noteTranscriptChanged(filePath).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('Secretary activity update failed', { filePath, error: message });
+    });
+  }
+
   try {
     const result = await sessionSynchronizerService.synchronizeProviderFile(provider, filePath);
     if (!result.indexed) {
@@ -431,6 +441,7 @@ export async function initializeSessionsWatcher(): Promise<void> {
  */
 export async function closeSessionsWatcher(): Promise<void> {
   clearPendingWatcherFlushTimer();
+  claudeSecretaryActivity.stop();
 
   if (sessionDbPollTimer) {
     clearInterval(sessionDbPollTimer);

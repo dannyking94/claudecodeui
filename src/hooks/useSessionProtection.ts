@@ -9,6 +9,12 @@ export interface SessionActivity {
    * the elapsed-time display and the stale `chat_subscribed` idle-ack guard.
    */
   startedAt: number;
+  /**
+   * The work runs in a process this app does not own — a registered
+   * secretary's own tmux claude, reported from its transcript. The indicator
+   * shows, but there is no run here to stop, wait on, or protect from refreshes.
+   */
+  external: boolean;
 }
 
 export type SessionActivityMap = ReadonlyMap<string, SessionActivity>;
@@ -22,12 +28,18 @@ export type SessionActivitySnapshot = {
 
 export type MarkSessionProcessing = (
   sessionId?: string | null,
-  activity?: { statusText?: string | null; canInterrupt?: boolean },
+  activity?: {
+    statusText?: string | null;
+    canInterrupt?: boolean;
+    external?: boolean;
+    /** Server-reported start, used only when the entry is new. */
+    startedAt?: number | null;
+  },
 ) => void;
 
 export type MarkSessionIdle = (
   sessionId?: string | null,
-  opts?: { ifStartedBefore?: number },
+  opts?: { ifStartedBefore?: number; onlyIfExternal?: boolean },
 ) => void;
 
 export type SyncProcessingSessions = (
@@ -51,6 +63,7 @@ const sessionActivityMapsMatch = (
       || leftActivity.statusText !== rightActivity.statusText
       || leftActivity.canInterrupt !== rightActivity.canInterrupt
       || leftActivity.startedAt !== rightActivity.startedAt
+      || leftActivity.external !== rightActivity.external
     ) {
       return false;
     }
@@ -79,17 +92,23 @@ export function useSessionProtection() {
 
     setProcessingSessions((prev) => {
       const existing = prev.get(sessionId);
+      const reportedStartedAt =
+        typeof activity?.startedAt === 'number' && Number.isFinite(activity.startedAt) && activity.startedAt > 0
+          ? Math.min(activity.startedAt, Date.now())
+          : undefined;
       const next: SessionActivity = {
         statusText:
           activity?.statusText !== undefined ? activity.statusText : existing?.statusText ?? null,
         canInterrupt: activity?.canInterrupt ?? existing?.canInterrupt ?? true,
-        startedAt: existing?.startedAt ?? Date.now(),
+        startedAt: existing?.startedAt ?? reportedStartedAt ?? Date.now(),
+        external: activity?.external ?? existing?.external ?? false,
       };
 
       if (
         existing
         && existing.statusText === next.statusText
         && existing.canInterrupt === next.canInterrupt
+        && existing.external === next.external
       ) {
         return prev;
       }
@@ -115,6 +134,12 @@ export function useSessionProtection() {
       // started after the subscribe was sent, the idle ack describes the
       // older request and must not clear the newer one.
       if (opts?.ifStartedBefore !== undefined && existing.startedAt >= opts.ifStartedBefore) {
+        return prev;
+      }
+
+      // An external-activity report going idle says nothing about a run this
+      // app started on the same session.
+      if (opts?.onlyIfExternal && !existing.external) {
         return prev;
       }
 
@@ -150,11 +175,14 @@ export function useSessionProtection() {
             snapshot.statusText !== undefined ? snapshot.statusText : existing?.statusText ?? null,
           canInterrupt: snapshot.canInterrupt ?? existing?.canInterrupt ?? true,
           startedAt: snapshotStartedAt ?? existing?.startedAt ?? now,
+          external: existing?.external ?? false,
         });
       }
 
       for (const [sessionId, activity] of prev) {
-        if (!incoming.has(sessionId) && now - activity.startedAt < LOCAL_ACTIVITY_GRACE_MS) {
+        // External activity never appears in the running-sessions list; its
+        // own `session_activity` events start and end it.
+        if (!incoming.has(sessionId) && (activity.external || now - activity.startedAt < LOCAL_ACTIVITY_GRACE_MS)) {
           updated.set(sessionId, activity);
         }
       }

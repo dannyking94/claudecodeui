@@ -370,7 +370,10 @@ export function useChatSessionState({
   // open. Session ids are concrete before any send, so no pending
   // placeholder entry exists anymore.
   const sessionActivity = (activeSessionId && processingSessions?.get(activeSessionId)) || null;
-  const isProcessing = sessionActivity !== null;
+  // External activity (a secretary working in its own tmux claude) only drives
+  // the indicator: there is no run here to stop, queue behind, or protect from
+  // transcript refreshes — the refreshes are how its work shows up.
+  const isProcessing = sessionActivity !== null && !sessionActivity.external;
   const canAbortSession = isProcessing && sessionActivity.canInterrupt;
 
   // Ref mirror so effects can read the latest map without re-running on

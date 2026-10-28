@@ -708,6 +708,7 @@ export function useProjectsState({
         && event.kind !== 'chat_subscribed'
         && event.kind !== 'loading_progress'
         && event.kind !== 'session_upserted'
+        && event.kind !== 'session_activity'
         && event.kind !== 'status'
         && event.kind !== 'stream_end'
         && event.kind !== 'permission_cancelled'
@@ -726,13 +727,15 @@ export function useProjectsState({
       }
 
       // The transcript of the currently viewed session changed on disk while
-      // no run is active here (e.g. edited from another client or the CLI):
-      // signal the chat view to reload its messages.
+      // no run is active here (e.g. edited from another client or the CLI, or
+      // a secretary working in its own claude — external activity, whose
+      // writes are exactly what the view must pick up): reload its messages.
       const currentSelectedSession = selectedSessionRef.current;
+      const activeRun = activeSessionsRef.current.get(upsert.sessionId);
       if (
         currentSelectedSession
         && upsert.sessionId === currentSelectedSession.id
-        && !activeSessionsRef.current.has(upsert.sessionId)
+        && (!activeRun || activeRun.external)
       ) {
         setExternalMessageUpdate((prev) => prev + 1);
       } else {

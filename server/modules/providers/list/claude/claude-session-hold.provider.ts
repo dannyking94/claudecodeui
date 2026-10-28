@@ -196,6 +196,20 @@ async function findRegisteredSecretary(
   return null;
 }
 
+/**
+ * The registered secretary for a session id, read from the default registry.
+ *
+ * Consumed by the secretary activity tracker, which sees every Claude
+ * transcript write and needs a registry-only check (one small file read)
+ * before it does any per-session work — the full holder lookup also scans
+ * `/proc`, which is too much to run on every unrelated session's write.
+ */
+export function findRegisteredClaudeSecretary(
+  sessionId: string,
+): Promise<{ name: string; inbox: string | null } | null> {
+  return findRegisteredSecretary(defaultDependencies.registryPath, sessionId);
+}
+
 async function findForeignProcess(
   sessionId: string,
   dependencies: SessionHoldDependencies,

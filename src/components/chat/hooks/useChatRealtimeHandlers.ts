@@ -48,6 +48,14 @@ interface UseChatRealtimeHandlersArgs {
   sessionStore: SessionStore;
 }
 
+/** Activity for a session another process is working on (see `session_activity`). */
+const externalActivityOf = (msg: ServerEvent) => ({
+  statusText: null,
+  canInterrupt: false,
+  external: true,
+  startedAt: typeof msg.startedAt === 'number' ? msg.startedAt : null,
+});
+
 /* ------------------------------------------------------------------ */
 /*  Hook                                                              */
 /* ------------------------------------------------------------------ */
@@ -122,7 +130,9 @@ export function useChatRealtimeHandlers({
           // pending tool-permission prompts for the run.
           if (!sid) return;
 
-          if (msg.isProcessing) {
+          if (msg.isProcessing && msg.external === true) {
+            onSessionProcessing?.(sid, externalActivityOf(msg));
+          } else if (msg.isProcessing) {
             onSessionProcessing?.(sid);
           } else {
             // Idle ack: ignore it if a newer request started after the
@@ -144,6 +154,19 @@ export function useChatRealtimeHandlers({
             if (hasPendingActionablePermissionRequests && !hadActionablePermissionRequests) {
               void playNotificationSound();
             }
+          }
+          return;
+        }
+
+        case 'session_activity': {
+          // A registered secretary's own claude started or finished a turn
+          // (derived server-side from its transcript). Nothing runs here, so
+          // the entry is marked external: no stop button, no send queueing.
+          if (typeof msg.sessionId !== 'string' || !msg.sessionId) return;
+          if (msg.isProcessing) {
+            onSessionProcessing?.(msg.sessionId, externalActivityOf(msg));
+          } else {
+            onSessionIdle?.(msg.sessionId, { onlyIfExternal: true });
           }
           return;
         }

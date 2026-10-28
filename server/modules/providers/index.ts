@@ -17,3 +17,8 @@ export { closeSessionsWatcher } from './services/sessions-watcher.service.js';
 // bootstrap to stop the shell websocket running `claude --resume` on a session
 // another claude process (or a registered secretary) already holds.
 export { describeClaudeSessionHold, findClaudeSessionHolder } from './list/claude/claude-session-hold.provider.js';
+
+// claudeSecretaryActivity: used by the chat websocket so a `chat.subscribe` ack
+// reports a registered secretary that is mid-turn as processing — its row has
+// no cloudcli run, so the run registry alone would always say idle.
+export { claudeSecretaryActivity } from './list/claude/claude-secretary-activity.provider.js';

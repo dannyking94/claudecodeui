@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { WebSocket } from 'ws';
 
 import { sessionsDb } from '@/modules/database/index.js';
-import { providerModelsService } from '@/modules/providers/index.js';
+import { claudeSecretaryActivity, providerModelsService } from '@/modules/providers/index.js';
 import {
   startSystemStatsCollection,
   stopSystemStatsCollectionIfIdle,
@@ -394,10 +394,16 @@ function handleChatSubscribe(
     // Claude runtime, so they can be looked up directly.
     const pendingPermissions = dependencies.runtime.getPendingApprovalsForSession(sessionId);
 
+    // A registered secretary's row never has a run here — it works in its own
+    // tmux claude — so its transcript-derived activity stands in. `external`
+    // tells the client nothing here can stop it or should wait for it.
+    const secretaryActivity = isProcessing ? null : claudeSecretaryActivity.getActivity(sessionId);
+
     sendJson(ws, {
       kind: 'chat_subscribed',
       sessionId,
-      isProcessing,
+      isProcessing: isProcessing || secretaryActivity !== null,
+      ...(secretaryActivity ? { external: true, startedAt: secretaryActivity.since } : {}),
       lastSeq: run?.lastSeq ?? 0,
       pendingPermissions,
       timestamp: new Date().toISOString(),
