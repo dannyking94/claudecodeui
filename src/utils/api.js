@@ -181,8 +181,30 @@ export const storeAuthToken = (token) => {
   return true;
 };
 
+/**
+ * Upper bound on an authenticated GET/HEAD that brought no signal of its own.
+ *
+ * Over plain HTTP/1.1 (the LAN or tailnet IP) the browser opens at most six
+ * connections per origin. A response the server never finishes holds one of
+ * them for good, and once six are held every later request — loading a
+ * session, starting a new one, the usage poll — queues inside the browser
+ * without ever reaching the server. Aborting closes the connection and gives
+ * the slot back. Reads are bounded generously; writes are left alone because
+ * a slow one may still be doing its work.
+ */
+export const READ_REQUEST_TIMEOUT_MS = 120_000;
+
+const withReadTimeout = (options) => {
+  const method = (options.method || 'GET').toUpperCase();
+  if (options.signal || (method !== 'GET' && method !== 'HEAD') || typeof AbortSignal?.timeout !== 'function') {
+    return options;
+  }
+  return { ...options, signal: AbortSignal.timeout(READ_REQUEST_TIMEOUT_MS) };
+};
+
 // Utility function for authenticated API calls
-export const authenticatedFetch = (url, options = {}) => {
+export const authenticatedFetch = (url, requestOptions = {}) => {
+  const options = withReadTimeout(requestOptions);
   const token = getStoredAuthToken();
 
   const defaultHeaders = {};

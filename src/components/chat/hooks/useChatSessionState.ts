@@ -316,6 +316,10 @@ export function useChatSessionState({
     resetStreamingState();
     setCurrentSessionId(null);
     setPendingUserMessage(null);
+    // A history load still in flight for the session being left would
+    // otherwise keep the draft behind a "Loading session messages" spinner
+    // until that request settles — forever, if it never does.
+    setIsLoadingSessionMessages(false);
     messagesOffsetRef.current = 0;
     setHasMoreMessages(false);
     setTotalMessages(0);
@@ -977,6 +981,7 @@ export function useChatSessionState({
 
       resetStreamingState();
       setCurrentSessionId(null);
+      setIsLoadingSessionMessages(false);
       messagesOffsetRef.current = 0;
       setHasMoreMessages(false);
       setTotalMessages(0);
@@ -1058,6 +1063,9 @@ export function useChatSessionState({
       limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
+      // The view moved on (New Session, another session) while this was in
+      // flight; its totals and loading flag belong to whatever is shown now.
+      if (lastLoadedSessionKeyRef.current !== sessionKey) return;
       if (slot) {
         setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
@@ -1065,6 +1073,7 @@ export function useChatSessionState({
       }
       setIsLoadingSessionMessages(false);
     }).catch(() => {
+      if (lastLoadedSessionKeyRef.current !== sessionKey) return;
       setIsLoadingSessionMessages(false);
     });
   }, [

@@ -7,6 +7,7 @@ import {
   AUTH_SESSION_EXPIRED_EVENT,
   authenticatedFetch,
   clearStoredAuthToken,
+  READ_REQUEST_TIMEOUT_MS,
   expireAuthSession,
   getStoredAuthToken,
   isAuthTokenExpired,
@@ -199,7 +200,7 @@ const withStubbedFetch = async ({ status, authError, refreshedToken, onRequest }
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, init) => {
-    requests.push({ url, headers: init.headers });
+    requests.push({ url, headers: init.headers, init });
     onRequest?.();
     return new Response('{}', {
       status,
@@ -386,4 +387,53 @@ test('authenticatedFetch: a late refresh cannot restore a signed-out session', a
     () => authenticatedFetch('/api/projects'),
   );
   assert.equal(localStorage.getItem('auth-token'), null);
+});
+
+// --- read timeout ---------------------------------------------------------
+// A response the server never finishes must not hold one of the browser's six
+// per-origin connections forever, so unbounded reads get a ceiling.
+
+test('authenticatedFetch: a GET without its own signal is bounded by the read timeout', async () => {
+  const requests = await withStubbedFetch({ status: 200 }, () => authenticatedFetch('/api/projects'));
+  const { signal } = requests[0].init;
+  assert.ok(signal instanceof AbortSignal);
+  assert.equal(signal.aborted, false);
+  assert.ok(READ_REQUEST_TIMEOUT_MS >= 60_000, 'the ceiling must stay well above any healthy read');
+});
+
+test('authenticatedFetch: a caller-supplied signal is kept as-is', async () => {
+  const controller = new AbortController();
+  const requests = await withStubbedFetch({ status: 200 }, () =>
+    authenticatedFetch('/api/projects', { signal: controller.signal }));
+  assert.equal(requests[0].init.signal, controller.signal);
+});
+
+test('authenticatedFetch: writes get no implicit timeout', async () => {
+  const requests = await withStubbedFetch({ status: 200 }, () =>
+    authenticatedFetch('/api/projects/create-project', { method: 'POST', body: '{}' }));
+  assert.equal(requests[0].init.signal, undefined);
+});
+
+test('authenticatedFetch: a GET that never answers is aborted at the ceiling', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const originalTimeout = AbortSignal.timeout;
+  // AbortSignal.timeout uses an internal timer the mock cannot reach, so the
+  // ceiling is rebuilt on the mocked setTimeout for this test.
+  AbortSignal.timeout = (ms) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException('timed out', 'TimeoutError')), ms);
+    return controller.signal;
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(init.signal.reason));
+  });
+  try {
+    const pending = authenticatedFetch('/api/system/claude-usage-never-answers');
+    t.mock.timers.tick(READ_REQUEST_TIMEOUT_MS);
+    await assert.rejects(pending, { name: 'TimeoutError' });
+  } finally {
+    globalThis.fetch = originalFetch;
+    AbortSignal.timeout = originalTimeout;
+  }
 });

@@ -47,6 +47,7 @@ import { voiceRoutes } from './modules/voice/index.js';
 import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
 import { assetsRoutes } from './modules/assets/index.js';
 import { compressJsonResponses, createCompressedAssetHandler } from './modules/http-compression/index.js';
+import { createRequestWatchdog } from './modules/request-watchdog/index.js';
 import { fileTreeRoutes } from './modules/file-tree/index.js';
 import { worktreesRoutes } from './modules/worktrees/index.js';
 import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
@@ -128,6 +129,7 @@ providerRuntimeService.setSpontaneousRunOpener(openSpontaneousChatRun);
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
+app.use('/api', createRequestWatchdog());
 app.use('/api', preventApiResponseStorage);
 app.use('/api', compressJsonResponses);
 

@@ -18,6 +18,14 @@ const POLL_INTERVAL_MS = 60_000;
  */
 const STARTUP_RETRY_INTERVAL_MS = 5_000;
 
+/**
+ * Ceiling on one poll. The route answers from a server-side cache in
+ * milliseconds, so anything slower is a stuck request — and an unanswered one
+ * both ended this tab's polling for good and pinned one of the browser's six
+ * connections to the origin, which every other API call then queued behind.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 function readLimits(value: unknown): ClaudeUsageLimit[] {
   if (!Array.isArray(value)) {
     return [];
@@ -88,14 +96,23 @@ export function useClaudeUsage(enabled = true): ClaudeUsage | null {
   const unsupportedRef = useRef(false);
   /** False until the route has answered at all; drives the fast startup retry. */
   const settledRef = useRef(false);
+  /**
+   * True while a poll is outstanding. Every return to the tab polls at once,
+   * so without this a slow route collected one more open request per tab
+   * switch instead of one in total.
+   */
+  const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!enabled || unsupportedRef.current) {
+    if (!enabled || unsupportedRef.current || inFlightRef.current) {
       return;
     }
 
+    inFlightRef.current = true;
     try {
-      const response = await authenticatedFetch('/api/system/claude-usage');
+      const response = await authenticatedFetch('/api/system/claude-usage', {
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
 
       // The SPA fallback is the one unambiguous "no such route" signal.
       if (!response.headers.get('content-type')?.includes('application/json')) {
@@ -127,7 +144,10 @@ export function useClaudeUsage(enabled = true): ClaudeUsage | null {
         // only that the lookup failed — the allowance itself is unchanged, and
         // blanking on it made the pill vanish for a minute at a time whenever
         // the undocumented endpoint rate-limited us.
+        // The reading on screen is kept but marked stale, so the pill greys
+        // out rather than presenting an old figure as current.
         if (payload.reason === 'upstream_error') {
+          setUsage((previous) => (previous && !previous.stale ? { ...previous, stale: true } : previous));
           return;
         }
 
@@ -150,8 +170,11 @@ export function useClaudeUsage(enabled = true): ClaudeUsage | null {
           : null,
       );
     } catch {
-      // A transient network failure keeps the last known reading on screen
-      // rather than blanking the pill; the next tick corrects it.
+      // A transient network failure or a timed-out poll keeps the last known
+      // reading on screen rather than blanking the pill; the next tick
+      // corrects it.
+    } finally {
+      inFlightRef.current = false;
     }
   }, [enabled]);
 
