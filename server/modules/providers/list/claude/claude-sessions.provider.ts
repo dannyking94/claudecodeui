@@ -8,6 +8,7 @@ import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMess
 import { parseFilesInputTag } from '@/shared/image-attachments.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord, sliceTailPage } from '@/shared/utils.js';
 import { sessionsDb } from '@/modules/database/index.js';
+import { normalizeChatWakeRow, presentChatBridgeTurns } from '@/modules/providers/list/claude/claude-chat-bridge-view.provider.js';
 
 const PROVIDER = 'claude';
 
@@ -684,7 +685,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
     const normalized: NormalizedMessage[] = [];
     for (const raw of rawMessages) {
-      normalized.push(...this.normalizeMessage(raw, sessionId));
+      const chatWake = normalizeChatWakeRow(raw, sessionId);
+      normalized.push(...(chatWake ? [chatWake] : this.normalizeMessage(raw, sessionId)));
     }
 
     for (const msg of normalized) {
@@ -703,15 +705,19 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       }
     }
 
+    // A secretary's chat-bridge wakes and replies read as a conversation.
+    // Needs the tool results attached above; runs before the page is cut.
+    const presented = presentChatBridgeTurns(normalized);
+
     let total = 0;
-    for (const msg of normalized) {
+    for (const msg of presented) {
       if (msg.kind !== 'tool_result') {
         total += 1;
       }
     }
     const normalizedOffset = Math.max(0, offset);
     const normalizedLimit = limit === null ? null : Math.max(0, limit);
-    const { page, hasMore } = sliceTailPage(normalized, normalizedLimit, normalizedOffset);
+    const { page, hasMore } = sliceTailPage(presented, normalizedLimit, normalizedOffset);
 
     return {
       messages: page,
