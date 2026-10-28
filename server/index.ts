@@ -12,6 +12,8 @@ import cors from 'cors';
 import { AppError, findApplicationRoot, getModuleDirectory, terminalTextStyles } from '@/shared/utils.js';
 import {
     closeSessionsWatcher,
+    describeClaudeSessionHold,
+    findClaudeSessionHolder,
     initializeSessionsWatcher,
     providerRuntimeService,
     restampCloudcliClaudeTranscripts,
@@ -116,6 +118,10 @@ const wss = createWebSocketServer(server, {
             }
 
             return null;
+        },
+        describeClaudeSessionHold: async (providerSessionId) => {
+            const holder = await findClaudeSessionHolder(providerSessionId);
+            return holder ? describeClaudeSessionHold(holder) : null;
         },
     },
     getPluginPort,

@@ -624,3 +624,129 @@ test('a snapshot from an incompatible build is ignored', async () => {
 
   assert.deepEqual(await service.getUsage(), { status: 'unavailable', reason: 'upstream_error' });
 });
+
+// ----------------- An attempt that never settles ------------
+
+/** A promise that never settles, standing in for a wedged read or socket. */
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
+
+const TEST_DEADLINE_MS = 40;
+
+/**
+ * Calls getUsage and fails the test if it does not answer well inside a second,
+ * which is what a hung shared in-flight promise looks like from the route.
+ */
+async function getUsageWithin(service: ReturnType<typeof createService>) {
+  const started = Date.now();
+  const result = await Promise.race([
+    service.getUsage(),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('getUsage did not settle')), 1_000).unref();
+    }),
+  ]);
+  assert.ok(Date.now() - started < 1_000);
+  return result;
+}
+
+test('a credentials read that never settles cannot hang the endpoint, and the next poll retries', async () => {
+  let currentTime = 1_000;
+  let credentialReads = 0;
+  const service = createService({
+    now: () => currentTime,
+    attemptDeadlineMs: TEST_DEADLINE_MS,
+    readCredentials: () => {
+      credentialReads += 1;
+      return never();
+    },
+  });
+
+  assert.deepEqual(await getUsageWithin(service), { status: 'unavailable', reason: 'upstream_error' });
+
+  currentTime = 40_000;
+  await getUsageWithin(service);
+  assert.equal(credentialReads, 2, 'the abandoned attempt does not block a fresh one');
+});
+
+test('an upstream request that ignores its abort signal cannot hang the endpoint', async () => {
+  let currentTime = 1_000;
+  let upstreamCalls = 0;
+  let sawAbort = false;
+  const service = createService({
+    now: () => currentTime,
+    attemptDeadlineMs: TEST_DEADLINE_MS,
+    fetchImpl: ((_url: string, init: RequestInit) => {
+      upstreamCalls += 1;
+      init.signal?.addEventListener('abort', () => {
+        sawAbort = true;
+      });
+      return never();
+    }) as unknown as typeof fetch,
+  });
+
+  assert.deepEqual(await getUsageWithin(service), { status: 'unavailable', reason: 'upstream_error' });
+  assert.ok(sawAbort, 'the deadline aborts the abandoned request');
+
+  currentTime = 40_000;
+  await getUsageWithin(service);
+  assert.equal(upstreamCalls, 2);
+});
+
+test('a response body that never finishes cannot hang the endpoint', async () => {
+  let currentTime = 1_000;
+  let upstreamCalls = 0;
+  const service = createService({
+    now: () => currentTime,
+    attemptDeadlineMs: TEST_DEADLINE_MS,
+    fetchImpl: (async () => {
+      upstreamCalls += 1;
+      return { ok: true, status: 200, headers: new Headers(), json: () => never() };
+    }) as unknown as typeof fetch,
+  });
+
+  assert.deepEqual(await getUsageWithin(service), { status: 'unavailable', reason: 'upstream_error' });
+
+  currentTime = 40_000;
+  await getUsageWithin(service);
+  assert.equal(upstreamCalls, 2);
+});
+
+test('a snapshot read that never settles cannot hang the endpoint', async () => {
+  const service = createService({
+    snapshotReadTimeoutMs: TEST_DEADLINE_MS,
+    attemptDeadlineMs: TEST_DEADLINE_MS,
+    readSnapshot: () => never(),
+  });
+
+  const result = await getUsageWithin(service);
+  assert.equal(result.status, 'ok', 'the live reading is still served');
+});
+
+test('a snapshot write that never settles does not hold the reading back', async () => {
+  const service = createService({
+    attemptDeadlineMs: TEST_DEADLINE_MS,
+    writeSnapshot: () => never(),
+  });
+
+  const result = await getUsageWithin(service);
+  assert.equal(result.status, 'ok');
+});
+
+test('a hung attempt serves the retained reading, marked stale', async () => {
+  let currentTime = 1_000;
+  let hang = false;
+  const service = createService({
+    now: () => currentTime,
+    attemptDeadlineMs: TEST_DEADLINE_MS,
+    fetchImpl: (async () => (hang ? never() : jsonResponse(USAGE_PAYLOAD))) as unknown as typeof fetch,
+  });
+
+  assert.equal((await getUsageWithin(service)).status, 'ok');
+
+  hang = true;
+  currentTime = 40_000;
+  const result = await getUsageWithin(service);
+  assert.equal(result.status, 'ok');
+  assert.equal((result as { stale?: boolean }).stale, true);
+});

@@ -26,6 +26,11 @@ import {
 } from '@/shared/image-attachments.js';
 import { claudeAgentPool } from '@/modules/providers/list/claude/claude-agent-pool.provider.js';
 import { CLAUDE_FALLBACK_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
+import {
+  CLAUDE_SESSION_HELD_ERROR_CODE,
+  describeClaudeSessionHold,
+  findClaudeSessionHolder,
+} from '@/modules/providers/list/claude/claude-session-hold.provider.js';
 import { restampClaudeTranscriptEntrypoint } from '@/modules/providers/list/claude/claude-transcript-entrypoint.provider.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import { resolveClaudeContextWindow } from '@/shared/claude-context-window.js';
@@ -58,6 +63,61 @@ const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode'])
  * pool simply drops unsolicited output.
  */
 let spontaneousRunOpener = null;
+
+/**
+ * Seams the runtime reaches the host through. Production uses the defaults;
+ * the runtime tests swap them so a held session can be simulated and a free
+ * one resumed without a real subprocess.
+ */
+const runtimeDependencies = {
+  findSessionHolder: findClaudeSessionHolder,
+  createQuery: query,
+};
+
+/**
+ * Replaces runtime seams and returns a function that restores the previous
+ * ones. Consumed by the providers tests only.
+ */
+export function overrideClaudeRuntimeDependencies(overrides) {
+  const previous = { ...runtimeDependencies };
+  Object.assign(runtimeDependencies, overrides);
+  return () => Object.assign(runtimeDependencies, previous);
+}
+
+/**
+ * Refuses a resume when another claude this server does not own is attached
+ * to the session (or it is a registered secretary). Resuming would start a
+ * second writer on one transcript — a copy without the original's chat tools.
+ *
+ * Sends the row its error and terminal `complete` itself and returns true when
+ * the run must stop. Nothing is spawned; the transcript view keeps working
+ * because the session watcher re-syncs the jsonl the real holder writes.
+ */
+async function refuseIfHeldElsewhere(providerSessionId, sessionId, ws) {
+  if (!providerSessionId) {
+    return false;
+  }
+  const holder = await runtimeDependencies.findSessionHolder(providerSessionId);
+  if (!holder) {
+    return false;
+  }
+
+  console.warn(
+    `[Claude SDK] Not resuming ${providerSessionId}: held elsewhere ` +
+    `(pid ${holder.pid ?? 'none'}, tmux ${holder.tmuxSession ?? 'unknown'}, registry ${holder.registryName ?? 'none'}).`,
+  );
+  const rowSessionId = sessionId || providerSessionId;
+  ws.send(createNormalizedMessage({
+    kind: 'error',
+    content: describeClaudeSessionHold(holder),
+    errorCode: CLAUDE_SESSION_HELD_ERROR_CODE,
+    holder,
+    sessionId: rowSessionId,
+    provider: 'claude',
+  }));
+  ws.send(createCompleteMessage({ provider: 'claude', sessionId: rowSessionId, exitCode: 1 }));
+  return true;
+}
 
 /**
  * Registers the chat-layer hook used to surface unsolicited turns.
@@ -658,6 +718,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // provider-native id recorded on the session row.
   const providerSessionId = context.resolveProviderSessionId(sessionId);
 
+  // Before anything can spawn — pooled or one-shot, new agent or reused one.
+  if (await refuseIfHeldElsewhere(providerSessionId, sessionId, ws)) {
+    return;
+  }
+
   // Only chat runs get a persistent agent: they have a stable app session id to
   // key it by, and a websocket the chat layer can deliver scheduled turns to
   // later. SSE/agent-route callers are one-shot by nature and keep the old path.
@@ -837,6 +902,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         state,
         route,
         openSpontaneousRun,
+        createQuery: runtimeDependencies.createQuery,
       });
 
       let agent;
@@ -874,7 +940,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       let queryInstance;
       try {
         try {
-          queryInstance = query({
+          queryInstance = runtimeDependencies.createQuery({
             prompt: createPrompt(),
             options: sdkOptions
           });
@@ -883,7 +949,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
           // Keep notification behavior operational via runtime events even if hook registration fails.
           console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
           delete sdkOptions.hooks;
-          queryInstance = query({
+          queryInstance = runtimeDependencies.createQuery({
             prompt: createPrompt(),
             options: sdkOptions
           });

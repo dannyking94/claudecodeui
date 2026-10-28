@@ -12,3 +12,8 @@ export { restampCloudcliClaudeTranscripts } from './list/claude/claude-transcrip
 
 export { initializeSessionsWatcher } from './services/sessions-watcher.service.js';
 export { closeSessionsWatcher } from './services/sessions-watcher.service.js';
+
+// findClaudeSessionHolder / describeClaudeSessionHold: used by the server
+// bootstrap to stop the shell websocket running `claude --resume` on a session
+// another claude process (or a registered secretary) already holds.
+export { describeClaudeSessionHold, findClaudeSessionHolder } from './list/claude/claude-session-hold.provider.js';

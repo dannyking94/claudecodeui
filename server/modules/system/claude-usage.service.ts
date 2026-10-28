@@ -19,6 +19,25 @@ const OAUTH_BETA_HEADER = 'oauth-2025-04-20';
 const REQUEST_TIMEOUT_MS = 5_000;
 
 /**
+ * Hard ceiling on one whole attempt — credentials read, request, body and all.
+ *
+ * `REQUEST_TIMEOUT_MS` only bounds what the fetch signal reaches. Everything
+ * else an attempt awaits (an injected or wedged file read, a body stream the
+ * signal never reaches) could otherwise stay pending forever, and because every
+ * caller shares the one in-flight promise, a single attempt that never settles
+ * hangs every later poll with it. On 2026-10-28 the live endpoint stopped
+ * answering for a day for exactly that reason. This deadline settles the attempt
+ * regardless, and stays under the client's 15 s poll timeout.
+ */
+const ATTEMPT_DEADLINE_MS = 8_000;
+
+/**
+ * Ceiling on the one-time snapshot restore. It is memoized, so a read that never
+ * settled would otherwise hang every poll before the attempt even starts.
+ */
+const SNAPSHOT_READ_TIMEOUT_MS = 2_000;
+
+/**
  * Every open tab polls independently and the upstream is unofficial, so one
  * call per window is shared by all of them rather than multiplied by tab count.
  */
@@ -156,6 +175,9 @@ type ClaudeUsageServiceOptions = {
   writeSnapshot?: (snapshotPath: string, contents: string) => Promise<void>;
   now?: () => number;
   logError?: (message: string, detail?: unknown) => void;
+  /** Overridden in tests so the never-settles cases finish quickly. */
+  attemptDeadlineMs?: number;
+  snapshotReadTimeoutMs?: number;
 };
 
 /**
@@ -175,6 +197,18 @@ function readRetryAfter(headerValue: string | null, currentTime: number): number
 
   const resumeAt = Date.parse(headerValue);
   return Number.isFinite(resumeAt) ? Math.max(0, resumeAt - currentTime) : null;
+}
+
+/**
+ * Settles with `fallback` once `ms` passes if `promise` has not settled first.
+ * The timer is always cleared, so a settled race leaves nothing scheduled.
+ */
+function withDeadline<T>(promise: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback()), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
 function readOptionalRecord(value: unknown): Record<string, unknown> | null {
@@ -401,6 +435,8 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
     },
     now = Date.now,
     logError = () => {},
+    attemptDeadlineMs = ATTEMPT_DEADLINE_MS,
+    snapshotReadTimeoutMs = SNAPSHOT_READ_TIMEOUT_MS,
   } = options;
 
   let cached: { result: ClaudeUsageResult; expiresAt: number } | null = null;
@@ -448,7 +484,7 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
     }
   }
 
-  async function fetchUsage(): Promise<UsageFetchOutcome> {
+  async function fetchUsage(abortSignal: AbortSignal): Promise<UsageFetchOutcome> {
     if (isPlatform) {
       return { kind: 'stable', reason: 'disabled' };
     }
@@ -464,7 +500,7 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
           Authorization: `Bearer ${credentials.token}`,
           'anthropic-beta': OAUTH_BETA_HEADER,
         },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.any([abortSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
       });
 
       if (!response.ok) {
@@ -522,7 +558,9 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
    * first was still reading the file.
    */
   function ensureRetainedLoaded(): Promise<void> {
-    retainedLoad ??= (async () => {
+    // A read that never settles is treated as "no snapshot": the restore is
+    // memoized, so leaving it unbounded would hang every poll from here on.
+    retainedLoad ??= withDeadline((async () => {
       try {
         const restored = readSnapshotContents(await readSnapshot(snapshotPath));
         // A live reading arrived while the file was being read; it is newer.
@@ -530,7 +568,9 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
       } catch {
         // No snapshot yet is the ordinary first-run state, not an error.
       }
-    })();
+    })(), snapshotReadTimeoutMs, () => {
+      logError('Claude usage snapshot read timed out');
+    });
 
     return retainedLoad;
   }
@@ -578,6 +618,27 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
       // serves this process, it just will not outlive it.
       logError('Claude usage snapshot could not be written', error);
     }
+  }
+
+  /**
+   * One upstream attempt, guaranteed to settle within `attemptDeadlineMs`.
+   *
+   * Whatever is still pending at the deadline is abandoned as a transient
+   * failure, and the request (if it got that far) is aborted so its socket is
+   * not left open behind the answer.
+   */
+  function runAttempt(): Promise<UsageFetchOutcome> {
+    const controller = new AbortController();
+    const attempt = fetchUsage(controller.signal).catch((error: unknown): UsageFetchOutcome => {
+      logError('Claude usage lookup failed', error);
+      return { kind: 'transient', rateLimited: false, retryAfterMs: null };
+    });
+
+    return withDeadline(attempt, attemptDeadlineMs, (): UsageFetchOutcome => {
+      logError('Claude usage attempt exceeded its deadline', attemptDeadlineMs);
+      controller.abort();
+      return { kind: 'transient', rateLimited: false, retryAfterMs: null };
+    });
   }
 
   /** Reconciles one attempt's outcome with the retained reading and backoff state. */
@@ -630,7 +691,7 @@ export function createClaudeUsageService(options: ClaudeUsageServiceOptions) {
         return retainedReading(currentTime) ?? { status: 'unavailable', reason: 'upstream_error' };
       }
 
-      inFlight ??= fetchUsage()
+      inFlight ??= runAttempt()
         .then((outcome) => {
           const result = applyOutcome(outcome);
           // Failures are cached too, so a signed-out host does not re-read the

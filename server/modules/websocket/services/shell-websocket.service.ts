@@ -106,6 +106,11 @@ type ShellWebSocketDependencies = {
     provider: string,
   ) => string | null | undefined;
   spawnPty?: typeof pty.spawn;
+  /**
+   * Why a Claude session must not be resumed here, or null when it is free.
+   * Absent means no check (tests, hosts that never wire it).
+   */
+  describeClaudeSessionHold?: (providerSessionId: string) => Promise<string | null>;
 };
 
 /**
@@ -392,6 +397,16 @@ export function handleShellConnection(
 
         const shellCommand = buildShellCommand(data, dependencies);
         const resumeSessionId = resolveResumeSessionId(data, dependencies);
+
+        // `claude --resume` on a session another claude already holds starts a
+        // second writer on its transcript. Refuse before anything spawns.
+        if (!isPlainShell && provider === 'claude' && resumeSessionId && dependencies.describeClaudeSessionHold) {
+          const holdMessage = await dependencies.describeClaudeSessionHold(resumeSessionId);
+          if (holdMessage) {
+            ws.send(JSON.stringify({ type: 'output', data: `\x1b[33m${holdMessage}\x1b[0m\r\n` }));
+            return;
+          }
+        }
         const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
         // An empty command must still yield a usable terminal: `bash -c ''` runs an
         // empty script and exits 0 immediately, killing the plain-shell tab.

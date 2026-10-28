@@ -117,3 +117,62 @@ test('shell output detects and normalizes a wrapped authentication URL', () => {
 
   pty.emitExit();
 });
+
+/** Lets the async init handler run to completion. */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+function claudeResumeInit(sessionId: string) {
+  return JSON.stringify({
+    type: 'init',
+    projectPath: process.cwd(),
+    sessionId,
+    hasSession: true,
+    provider: 'claude',
+  });
+}
+
+test('a claude session held elsewhere is not resumed in a terminal', async () => {
+  let spawned = 0;
+  const checked: string[] = [];
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, {
+    resolveProviderSessionId: () => 'provider-held',
+    spawnPty: (() => {
+      spawned += 1;
+      return createFakePty();
+    }) as never,
+    describeClaudeSessionHold: async (providerSessionId) => {
+      checked.push(providerSessionId);
+      return 'This session is running elsewhere (pid 42).';
+    },
+  });
+
+  socket.emit('message', claudeResumeInit(`held-${Date.now()}`));
+  await settle();
+
+  assert.deepEqual(checked, ['provider-held']);
+  assert.equal(spawned, 0);
+  assert.equal(socket.frames.length, 1);
+  assert.match(socket.frames[0], /running elsewhere \(pid 42\)/);
+});
+
+test('a free claude session still resumes in a terminal', async () => {
+  const pty = createFakePty();
+  const spawnedArgs: string[][] = [];
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, {
+    resolveProviderSessionId: () => 'provider-free',
+    spawnPty: ((_shell: string, args: string[]) => {
+      spawnedArgs.push(args);
+      return pty;
+    }) as never,
+    describeClaudeSessionHold: async () => null,
+  });
+
+  socket.emit('message', claudeResumeInit(`free-${Date.now()}`));
+  await settle();
+
+  assert.equal(spawnedArgs.length, 1);
+  assert.match(spawnedArgs[0].join(' '), /claude --resume "provider-free"/);
+  pty.emitExit();
+});
