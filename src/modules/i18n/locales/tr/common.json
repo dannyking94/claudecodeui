@@ -1,0 +1,417 @@
+{
+  "buttons": {
+    "save": "Kaydet",
+    "cancel": "İptal",
+    "delete": "Sil",
+    "create": "Oluştur",
+    "edit": "Düzenle",
+    "close": "Kapat",
+    "confirm": "Onayla",
+    "submit": "Gönder",
+    "retry": "Tekrar Dene",
+    "refresh": "Yenile",
+    "search": "Ara",
+    "clear": "Temizle",
+    "copy": "Kopyala",
+    "download": "İndir",
+    "upload": "Yükle",
+    "browse": "Gözat"
+  },
+  "tabs": {
+    "chat": "Sohbet",
+    "shell": "Shell",
+    "files": "Dosyalar",
+    "git": "Kaynak Kontrolü",
+    "tasks": "Görevler",
+    "browser": "Browser",
+    "computer": "Bilgisayar"
+  },
+  "status": {
+    "loading": "Yükleniyor...",
+    "success": "Başarılı",
+    "error": "Hata",
+    "failed": "Başarısız",
+    "pending": "Beklemede",
+    "completed": "Tamamlandı",
+    "inProgress": "Sürüyor",
+    "reconnecting": "Yeniden bağlanıyor...",
+    "chatConnectionLost": "Sohbet bağlantısı koptu. Yeniden bağlanıyor..."
+  },
+  "messages": {
+    "savedSuccessfully": "Başarıyla kaydedildi",
+    "deletedSuccessfully": "Başarıyla silindi",
+    "updatedSuccessfully": "Başarıyla güncellendi",
+    "operationFailed": "İşlem başarısız",
+    "networkError": "Ağ hatası. Lütfen bağlantını kontrol et.",
+    "unauthorized": "Yetkisiz erişim. Lütfen giriş yap.",
+    "notFound": "Bulunamadı",
+    "invalidInput": "Geçersiz girdi",
+    "requiredField": "Bu alan zorunlu",
+    "unknownError": "Bilinmeyen bir hata oluştu"
+  },
+  "navigation": {
+    "settings": "Ayarlar",
+    "home": "Ana Sayfa",
+    "back": "Geri",
+    "next": "İleri",
+    "previous": "Önceki",
+    "logout": "Çıkış Yap"
+  },
+  "common": {
+    "language": "Dil",
+    "theme": "Tema",
+    "darkMode": "Koyu Mod",
+    "lightMode": "Açık Mod",
+    "name": "İsim",
+    "description": "Açıklama",
+    "enabled": "Etkin",
+    "disabled": "Devre Dışı",
+    "optional": "İsteğe Bağlı",
+    "version": "Sürüm",
+    "select": "Seç",
+    "selectAll": "Tümünü Seç",
+    "deselectAll": "Tümünün Seçimini Kaldır"
+  },
+  "time": {
+    "justNow": "Az önce",
+    "minutesAgo": "{{count}} dakika önce",
+    "hoursAgo": "{{count}} saat önce",
+    "daysAgo": "{{count}} gün önce",
+    "yesterday": "Dün"
+  },
+  "fileOperations": {
+    "newFile": "Yeni Dosya",
+    "newFolder": "Yeni Klasör",
+    "rename": "Yeniden Adlandır",
+    "move": "Taşı",
+    "copyPath": "Yolu Kopyala",
+    "openInEditor": "Editörde Aç"
+  },
+  "mainContent": {
+    "loading": "CloudCLI Yükleniyor",
+    "settingUpWorkspace": "Çalışma alanın hazırlanıyor...",
+    "chooseProject": "Projeni Seç",
+    "selectProjectDescription": "Claude ile kodlamaya başlamak için kenar çubuğundan bir proje seç. Her proje kendi sohbet oturumlarını ve dosya geçmişini içerir.",
+    "tip": "İpucu",
+    "createProjectMobile": "Projelere erişmek için yukarıdaki menü düğmesine dokun",
+    "createProjectDesktop": "Kenar çubuğundaki klasör simgesine tıklayarak yeni bir proje oluştur",
+    "newSession": "Yeni Oturum",
+    "untitledSession": "Adsız Oturum",
+    "projectFiles": "Proje Dosyaları",
+    "renameSessionHint": "{{title}} (yeniden adlandırmak için çift tıklayın)",
+    "renameSessionLabel": "Oturum başlığı"
+  },
+  "fileTree": {
+    "loading": "Dosyalar yükleniyor...",
+    "files": "Dosyalar",
+    "simpleView": "Basit görünüm",
+    "compactView": "Kompakt görünüm",
+    "detailedView": "Detaylı görünüm",
+    "searchPlaceholder": "Dosya ve klasörlerde ara...",
+    "clearSearch": "Aramayı temizle",
+    "name": "İsim",
+    "size": "Boyut",
+    "modified": "Değiştirilme",
+    "permissions": "İzinler",
+    "noFilesFound": "Dosya bulunamadı",
+    "checkProjectPath": "Proje yolunun erişilebilir olduğunu kontrol et",
+    "loadFailed": "Dosyalar yüklenemedi",
+    "noMatchesFound": "Eşleşme bulunamadı",
+    "tryDifferentSearch": "Farklı bir arama terimi dene veya aramayı temizle",
+    "justNow": "az önce",
+    "minAgo": "{{count}} dakika önce",
+    "hoursAgo": "{{count}} saat önce",
+    "daysAgo": "{{count}} gün önce",
+    "newFile": "Yeni Dosya (Cmd+N)",
+    "newFolder": "Yeni Klasör (Cmd+Shift+N)",
+    "refresh": "Yenile",
+    "collapseAll": "Tümünü Daralt",
+    "context": {
+      "rename": "Yeniden Adlandır",
+      "delete": "Sil",
+      "copyPath": "Yolu Kopyala",
+      "download": "İndir",
+      "newFile": "Yeni Dosya",
+      "newFolder": "Yeni Klasör",
+      "upload": "Dosya Yükle",
+      "refresh": "Yenile",
+      "menuLabel": "Dosya bağlam menüsü",
+      "loading": "Yükleniyor..."
+    }
+  },
+  "projectWizard": {
+    "title": "Yeni Proje Oluştur",
+    "steps": {
+      "type": "Tür",
+      "configure": "Yapılandır",
+      "confirm": "Onayla"
+    },
+    "step1": {
+      "question": "Zaten bir çalışma alanın var mı, yoksa yeni bir tane mi oluşturmak istersin?",
+      "existing": {
+        "title": "Mevcut Çalışma Alanı",
+        "description": "Sunucumda zaten bir çalışma alanım var, sadece proje listesine eklemek istiyorum"
+      },
+      "new": {
+        "title": "Yeni Çalışma Alanı",
+        "description": "Yeni bir çalışma alanı oluştur, istersen bir GitHub deposundan klonla"
+      }
+    },
+    "step2": {
+      "existingPath": "Çalışma Alanı Yolu",
+      "newPath": "Çalışma Alanı Yolu",
+      "existingPlaceholder": "/mevcut/calisma-alani/yolu",
+      "newPlaceholder": "/yeni/calisma-alani/yolu",
+      "existingHelp": "Mevcut çalışma alanı dizinine giden tam yol",
+      "newHelp": "Çalışma alanı dizinine giden tam yol",
+      "githubUrl": "GitHub URL'si (İsteğe Bağlı)",
+      "githubPlaceholder": "https://github.com/kullanici/depo",
+      "githubHelp": "İsteğe bağlı: bir depoyu klonlamak için GitHub URL'si gir",
+      "githubAuth": "GitHub Kimlik Doğrulama (İsteğe Bağlı)",
+      "githubAuthHelp": "Yalnızca özel depolar için gereklidir. Genel depolar kimlik doğrulama olmadan klonlanabilir.",
+      "loadingTokens": "Kayıtlı token'lar yükleniyor...",
+      "storedToken": "Kayıtlı Token",
+      "newToken": "Yeni Token",
+      "nonePublic": "Yok (Genel)",
+      "selectToken": "Token Seç",
+      "selectTokenPlaceholder": "-- Bir token seç --",
+      "tokenPlaceholder": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "tokenHelp": "Bu token sadece bu işlem için kullanılacak",
+      "publicRepoInfo": "Genel depolar kimlik doğrulama gerektirmez. Genel bir depo klonluyorsan token girmeyi atlayabilirsin.",
+      "noTokensHelp": "Kayıtlı token yok. Kolay tekrar kullanım için Ayarlar → API Anahtarları bölümünden token ekleyebilirsin.",
+      "optionalTokenPublic": "GitHub Token (Genel Depolar için İsteğe Bağlı)",
+      "tokenPublicPlaceholder": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (genel depolar için boş bırak)"
+    },
+    "step3": {
+      "reviewConfig": "Yapılandırmanı Gözden Geçir",
+      "existingWorkspace": "Mevcut Çalışma Alanı",
+      "newWorkspace": "Yeni Çalışma Alanı",
+      "path": "Yol:",
+      "cloneFrom": "Şuradan Klonla:",
+      "authentication": "Kimlik Doğrulama:",
+      "usingStoredToken": "Kayıtlı token kullanılıyor:",
+      "usingProvidedToken": "Girilen token kullanılıyor",
+      "noAuthentication": "Kimlik doğrulama yok",
+      "sshKey": "SSH Anahtarı",
+      "existingInfo": "Çalışma alanı proje listene eklenecek ve Claude/Cursor oturumları için kullanılabilir olacak.",
+      "newWithClone": "Depo bu klasöre klonlanacak.",
+      "newEmpty": "Çalışma alanı proje listene eklenecek ve Claude/Cursor oturumları için kullanılabilir olacak.",
+      "cloningRepository": "Depo klonlanıyor..."
+    },
+    "buttons": {
+      "cancel": "İptal",
+      "back": "Geri",
+      "next": "İleri",
+      "createProject": "Projeyi Oluştur",
+      "creating": "Oluşturuluyor...",
+      "cloning": "Klonlanıyor..."
+    },
+    "errors": {
+      "selectType": "Lütfen mevcut çalışma alanın olduğunu mu yoksa yeni oluşturmak mı istediğini seç",
+      "providePath": "Lütfen bir çalışma alanı yolu gir",
+      "failedToCreate": "Çalışma alanı oluşturulamadı",
+      "failedToCreateFolder": "Klasör oluşturulamadı"
+    }
+  },
+  "notifications": {
+    "genericTool": "bir araç",
+    "codes": {
+      "generic": {
+        "info": {
+          "title": "Bildirim"
+        }
+      },
+      "permission": {
+        "required": {
+          "title": "Aksiyon Gerekli",
+          "body": "{{toolName}} kararını bekliyor."
+        }
+      },
+      "run": {
+        "stopped": {
+          "title": "Çalıştırma Durduruldu",
+          "body": "Sebep: {{reason}}"
+        },
+        "failed": {
+          "title": "Çalıştırma Başarısız"
+        }
+      },
+      "agent": {
+        "notification": {
+          "title": "Ajan Bildirimi"
+        }
+      }
+    }
+  },
+  "versionUpdate": {
+    "title": "Güncelleme Mevcut",
+    "newVersionReady": "Yeni bir sürüm hazır",
+    "currentVersion": "Mevcut Sürüm",
+    "latestVersion": "Son Sürüm",
+    "whatsNew": "Yenilikler:",
+    "viewFullRelease": "Tam sürüm notlarını gör",
+    "updateProgress": "Güncelleme İlerlemesi:",
+    "manualUpgrade": "Manuel yükseltme:",
+    "npmUpgradeCommand": "npm install -g @cloudcli-ai/cloudcli@latest",
+    "manualUpgradeHint": "Veya güncellemeyi otomatik çalıştırmak için \"Şimdi Güncelle\"ye tıkla.",
+    "updateCompleted": "Güncelleme başarıyla tamamlandı!",
+    "restartServer": "Değişikliklerin uygulanması için sunucuyu yeniden başlat.",
+    "updateFailed": "Güncelleme başarısız",
+    "buttons": {
+      "close": "Kapat",
+      "later": "Daha Sonra",
+      "copyCommand": "Komutu Kopyala",
+      "updateNow": "Şimdi Güncelle",
+      "updating": "Güncelleniyor..."
+    },
+    "ariaLabels": {
+      "closeModal": "Sürüm yükseltme modalını kapat",
+      "showSidebar": "Kenar çubuğunu göster",
+      "settings": "Ayarlar",
+      "updateAvailable": "Güncelleme mevcut",
+      "closeSidebar": "Kenar çubuğunu kapat",
+      "resizeSidebar": "Kenar çubuğunu yeniden boyutlandır"
+    },
+    "startingUpdate": "Güncelleme başlatılıyor...",
+    "updateStartedRestarting": "Güncelleme başladı. Sunucu, güncellemeyi uygulamak için yeniden başlıyor gibi görünüyor.",
+    "unexpectedResponse": "Güncelleme beklenmeyen bir yanıt döndürdü (HTTP {{status}}). Aşağıdaki komutla elle güncelleyin.",
+    "connectionInterrupted": "Sunucuyla bağlantı kesildi — büyük olasılıkla güncellemeyi uygulamak için yeniden başlıyor.",
+    "unknownError": "Bilinmeyen hata",
+    "refreshNow": "Pencere şimdi yenileniyor...",
+    "refreshIn_one": "Pencere {{count}} saniye içinde yenilenecek. Güncelleme uygulanmazsa ortamı YENİDEN BAŞLATIN.",
+    "refreshIn_other": "Pencere {{count}} saniye içinde yenilenecek. Güncelleme uygulanmazsa ortamı YENİDEN BAŞLATIN."
+  },
+  "commandPalette": {
+    "title": "Komut paleti",
+    "pages": {
+      "actions": "Eylemler",
+      "files": "Dosyalar",
+      "sessions": "Oturumlar",
+      "commits": "Kayıtlar (commit)",
+      "branches": "Dallar"
+    },
+    "backToAll": "Tümüne dön",
+    "backspaceHint": "Geri dönmek için Backspace",
+    "searchPage": "{{page}} içinde ara…",
+    "searchAnything": "Aramak için yazın…",
+    "noResults": "Sonuç yok.",
+    "groupActions": "Eylemler",
+    "groupNavigate": "Git (sayfa)",
+    "groupGit": "Git",
+    "groupSettings": "Ayarlar",
+    "groupSessions": "Oturumlar",
+    "groupFiles": "Dosyalar",
+    "groupCommits": "Kayıtlar (commit)",
+    "groupBranches": "Dallar",
+    "startNewChat": "Yeni sohbet başlat",
+    "selectProjectFirst": "Önce bir proje seçin",
+    "openSettings": "Ayarları aç",
+    "toggleTheme": "Temayı değiştir",
+    "navChat": "Sohbete git",
+    "navFiles": "Dosyalara git",
+    "navShell": "Terminale git",
+    "navGit": "Git sekmesine git",
+    "navTasks": "Görevlere git",
+    "gitFetch": "Git: Getir (fetch)",
+    "gitPull": "Git: Çek (pull)",
+    "gitPush": "Git: Gönder (push)",
+    "settingsItem": "Ayarlar: {{label}}",
+    "browseAllSessions": "Tüm oturumlara göz at ({{count}})",
+    "browseAllFiles": "Tüm dosyalara göz at ({{count}})",
+    "browseAllCommits": "Tüm kayıtlara göz at ({{count}})",
+    "browseAllBranches": "Tüm dallara göz at ({{count}})",
+    "switchTo": "Geç: {{name}}"
+  },
+  "folderBrowser": {
+    "title": "Klasör Seç",
+    "hideHidden": "Gizli klasörleri gizle",
+    "showHidden": "Gizli klasörleri göster",
+    "createNew": "Yeni klasör oluştur",
+    "newFolderPlaceholder": "Yeni klasör adı",
+    "create": "Oluştur",
+    "loadFailed": "Klasörler yüklenemedi",
+    "createFailed": "Klasör oluşturulamadı",
+    "noSubfolders": "Alt klasör bulunamadı",
+    "select": "Seç",
+    "pathLabel": "Yol:",
+    "useThisFolder": "Bu klasörü kullan"
+  },
+  "misc": {
+    "errorTitle": "Bir şeyler ters gitti",
+    "errorDescription": "Sohbet ekranı yüklenirken bir hata oluştu.",
+    "errorDetails": "Hata Ayrıntıları",
+    "tryAgain": "Tekrar Dene",
+    "projectFallback": "Proje",
+    "openMenu": "Menüyü aç",
+    "noProjectSelected": "Proje Seçilmedi",
+    "projectRequiredForShell": "Terminal açmak için bir proje gerekli",
+    "completedBadge": "(Tamamlandı)",
+    "close": "Kapat",
+    "hideToken": "Anahtarı gizle",
+    "showToken": "Anahtarı göster",
+    "unknownProvider": "Bilinmiyor",
+    "browseFolders": "Klasörlere göz at",
+    "closeLoginModal": "Giriş penceresini kapat",
+    "pluginLoadFailed": "Eklenti yüklenemedi: {{error}}"
+  },
+  "workflow": {
+    "title": "İş akışı",
+    "status": {
+      "running": "çalışıyor",
+      "completed": "bitti",
+      "failed": "başarısız",
+      "stopped": "sonuç yok"
+    },
+    "stoppedHint": "Çalışma, bu iş akışı sonuç bildirmeden sona erdi",
+    "phases": "Aşamalar",
+    "agents": "Ajanlar",
+    "agentsFinished_one": "{{count}} ajandan {{finished}} tanesi bitti",
+    "agentsFinished_other": "{{count}} ajandan {{finished}} tanesi bitti",
+    "agentsFailed": "{{count}} başarısız",
+    "agentsProgress_one": "{{finished}}/{{count}} ajan",
+    "agentsProgress_other": "{{finished}}/{{count}} ajan",
+    "agentStatus": {
+      "queued": "sırada",
+      "running": "çalışıyor",
+      "completed": "bitti",
+      "failed": "başarısız",
+      "stopped": "sonuç yok"
+    },
+    "agentTokens": "{{tokens}} token",
+    "agentToolCalls_one": "{{count}} araç çağrısı",
+    "agentToolCalls_other": "{{count}} araç çağrısı",
+    "agentTimelineLoading": "Ajanın adımları okunuyor…",
+    "agentTimelineEmpty": "Henüz kayıt yok",
+    "agentTimelineUnavailable": "Adımlar alınamadı: {{reason}}",
+    "usage": "{{toolUses}} araç kullanımı · {{elapsed}}",
+    "currentAgent": "şu an: {{label}}",
+    "result": "Sonuç",
+    "script": "Betik",
+    "backgroundTasks": "Arka plan görevleri",
+    "backgroundAgent": "Ajan",
+    "backgroundCommand": "Komut",
+    "stopTask": "Durdur",
+    "taskRowNotLoaded": "Bu konuşmada daha önce başlatıldı; yüklemek için tıklayın",
+    "taskOfAgent": "Bu oturumun ajanlarından biri tarafından başlatıldı"
+  },
+  "cancel": "İptal",
+  "systemStatus": {
+    "title": "Bilgisayar",
+    "close": "Kapat",
+    "gpu": "GPU",
+    "vram": "VRAM",
+    "cpu": "CPU",
+    "memory": "Bellek",
+    "noGpu": "NVIDIA GPU bulunamadı",
+    "thisMachine": "Bu makine",
+    "unreachable": "Erişilemiyor",
+    "unavailable": "Bu kurulumda ana makine durumu kullanılamıyor",
+    "serverOutdated": "Ana makine durumunu etkinleştirmek için sunucuyu yeniden başlatın",
+    "waiting": "Veri bekleniyor…",
+    "windowStart": "60sn",
+    "windowEnd": "şimdi",
+    "gigabytesOfTotal": "{{used}} / {{total}} GB",
+    "wattsOfLimit": "{{draw}} / {{limit}} W",
+    "watts": "{{draw}} W"
+  }
+}

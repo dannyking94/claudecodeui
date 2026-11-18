@@ -1,3 +1,4 @@
+import { errorMessage } from '@/shared/utils.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
@@ -9,7 +10,9 @@ import type {
   ProviderRunFunction,
   ProviderRuntimeContext,
   ProviderRuntimeWriter,
-  SpontaneousRunOpener,
+  SideQuestionOutcome,
+  SideQuestionRequest,
+  SideQuestionSink,
 } from '@/shared/types.js';
 
 type ProviderRuntimeServiceDependencies = {
@@ -22,6 +25,11 @@ type ProviderRuntimeServiceDependencies = {
     requestedModel?: string | null,
   ): Promise<string | undefined>;
   getProviderModels: typeof providerModelsService.getProviderModels;
+  /**
+   * Builds the SDK query for a side-question run. Production leaves this
+   * unset so the runtime uses the SDK's own; tests supply a scripted stream.
+   */
+  createQuery?: ProviderRuntimeContext['createQuery'];
 };
 
 const defaultDependencies: ProviderRuntimeServiceDependencies = {
@@ -30,7 +38,7 @@ const defaultDependencies: ProviderRuntimeServiceDependencies = {
   resolveProviderSessionId: (sessionId) => sessionsService.resolveProviderSessionId(sessionId),
   resolveResumeModel: (provider, sessionId, requestedModel) =>
     providerModelsService.resolveResumeModel(provider, sessionId, requestedModel),
-  getProviderModels: (provider, options) => providerModelsService.getProviderModels(provider, options),
+  getProviderModels: (provider) => providerModelsService.getProviderModels(provider),
 };
 
 /**
@@ -51,8 +59,7 @@ export function createProviderRuntimeService(
     resolveProviderSessionId: dependencies.resolveProviderSessionId,
     resolveResumeModel: (sessionId, requestedModel) =>
       dependencies.resolveResumeModel(provider.id, sessionId, requestedModel),
-    getProviderModels: async () =>
-      (await dependencies.getProviderModels(provider.id)).models,
+    getProviderModels: async () => dependencies.getProviderModels(provider.id),
     normalizeMessage: (raw, sessionId) => provider.sessions.normalizeMessage(raw, sessionId),
     async isProviderInstalled() {
       try {
@@ -93,28 +100,21 @@ export function createProviderRuntimeService(
       return Boolean(await dependencies.resolveProvider(providerName).runtime.abort(sessionId));
     },
 
-    /**
-     * Installs the chat layer's hook for turns no client asked for, on every
-     * runtime that keeps sessions alive between turns.
-     */
-    setSpontaneousRunOpener(opener: SpontaneousRunOpener | null): void {
-      for (const provider of dependencies.listProviders()) {
-        provider.runtime.setSpontaneousRunOpener?.(opener);
-      }
+    async stopBackgroundTask(providerName: LLMProvider, sessionId: string, taskId: string): Promise<boolean> {
+      // A runtime that never holds background work has no task to stop.
+      const { runtime } = dependencies.resolveProvider(providerName);
+      return Boolean(await runtime.stopBackgroundTask?.(sessionId, taskId));
     },
 
-    /** Releases any process held open for a session that is going away. */
-    endSession(sessionId: string): void {
-      for (const provider of dependencies.listProviders()) {
-        provider.runtime.endSession?.(sessionId);
-      }
+    async steer(providerName: LLMProvider, sessionId: string, command: string, options: AnyRecord): Promise<boolean> {
+      // A runtime that cannot write into a running turn has nothing to steer.
+      const { runtime } = dependencies.resolveProvider(providerName);
+      return Boolean(await runtime.steer?.(sessionId, command, options));
     },
 
-    /** Releases every held process; called on server shutdown. */
-    shutdown(): void {
-      for (const provider of dependencies.listProviders()) {
-        provider.runtime.shutdown?.();
-      }
+    hasBackgroundWork(sessionId: string): boolean {
+      return dependencies.listProviders().some((provider) =>
+        (provider.runtime.listBackgroundWork?.() ?? []).some((entry) => entry.sessionId === sessionId));
     },
 
     resolveToolApproval(requestId: string, decision: ProviderPermissionDecision): void {
@@ -127,6 +127,29 @@ export function createProviderRuntimeService(
       return dependencies.listProviders().flatMap(
         (provider) => provider.runtime.permissions?.listPending(sessionId) ?? [],
       );
+    },
+
+    async askSideQuestion(
+      providerName: LLMProvider,
+      request: SideQuestionRequest,
+      sink: SideQuestionSink,
+    ): Promise<SideQuestionOutcome> {
+      try {
+        const provider = dependencies.resolveProvider(providerName);
+        const context: ProviderRuntimeContext = {
+          ...createRuntimeContext(provider),
+          createQuery: dependencies.createQuery,
+        };
+
+        if (provider.runtime.askSideQuestion) {
+          return await provider.runtime.askSideQuestion(request, sink, context);
+        }
+
+        // No runtime support: name it and stop, instead of guessing at an answer.
+        return { status: 'error', error: `Provider "${providerName}" has no side questions.`, answer: '' };
+      } catch (error) {
+        return { status: 'error', error: errorMessage(error), answer: '' };
+      }
     },
   };
 }

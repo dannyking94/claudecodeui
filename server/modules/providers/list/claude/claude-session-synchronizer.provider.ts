@@ -135,6 +135,18 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
+    // A transcript a session's context was cleared off stays on disk as an
+    // earlier part of that conversation. Re-indexing it would list it as a
+    // session of its own — and for a session discovered from disk, whose app
+    // id is that transcript's id, it would hand the row back to the context
+    // the user cleared.
+    if (sessionsDb.isProviderSessionSuperseded(parsed.sessionId, this.provider)) {
+      // Cleared before this file was ever indexed: its path is not on record
+      // yet, and the history reader needs it to show that part.
+      sessionsDb.recordSupersededTranscriptPath(parsed.sessionId, this.provider, filePath);
+      return null;
+    }
+
     // App-created sessions are keyed by an app id, so disk-discovered provider
     // ids must be resolved through the provider-id mapping first.
     const existingSession = sessionsDb.getSessionByProviderSessionId(parsed.sessionId)
@@ -147,9 +159,9 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       };
     }
 
-    let sessionName = nameMap.get(parsed.sessionId);
+    let sessionName = await this.extractSessionTitle(filePath, parsed.sessionId);
     if (!sessionName) {
-      sessionName = await this.extractSessionAiTitleFromEnd(filePath, parsed.sessionId);
+      sessionName = nameMap.get(parsed.sessionId);
     }
 
     return {
@@ -158,7 +170,17 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     };
   }
 
-  private async extractSessionAiTitleFromEnd(
+  /**
+   * Returns the best available title for one session from its transcript.
+   *
+   * Scans forward keeping the last match of each event type, then prefers
+   * `custom-title` (a manual `/rename`) over `ai-title` over `last-prompt`.
+   * Claude writes `custom-title` immediately before `ai-title`, so a reverse
+   * scan that returns its first hit would always lose the manual rename.
+   *
+   * Returns undefined on a missing or unreadable file so sync can continue.
+   */
+  private async extractSessionTitle(
     filePath: string,
     sessionId: string
   ): Promise<string | undefined> {
@@ -166,7 +188,11 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       const content = await readFile(filePath, 'utf8');
       const lines = content.split(/\r?\n/);
 
-      for (let index = lines.length - 1; index >= 0; index -= 1) {
+      let foundCustomTitle: string | undefined;
+      let foundAiTitle: string | undefined;
+      let foundLastPrompt: string | undefined;
+
+      for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index]?.trim();
         if (!line) {
           continue;
@@ -182,18 +208,30 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
         const data = parsed as Record<string, unknown>;
         const eventType = typeof data.type === 'string' ? data.type : undefined;
         const eventSessionId = typeof data.sessionId === 'string' ? data.sessionId : undefined;
-        const aiTitle = typeof data.aiTitle === 'string' ? data.aiTitle : undefined;
-        const lastPrompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
-        const claudeRenamedTitle = typeof data.customTitle === 'string' ? data.customTitle : undefined;
 
-        if (
-          (eventType === 'ai-title' && eventSessionId === sessionId && aiTitle?.trim()) ||
-          (eventType === 'last-prompt' && eventSessionId === sessionId && lastPrompt?.trim()) ||
-          (eventType === "custom-title" && eventSessionId === sessionId && claudeRenamedTitle?.trim())
-        ) {
-          return aiTitle || lastPrompt || claudeRenamedTitle;
+        if (eventSessionId !== sessionId) {
+          continue;
+        }
+
+        if (eventType === 'custom-title') {
+          const title = typeof data.customTitle === 'string' ? data.customTitle : undefined;
+          if (title?.trim()) {
+            foundCustomTitle = title;
+          }
+        } else if (eventType === 'ai-title') {
+          const title = typeof data.aiTitle === 'string' ? data.aiTitle : undefined;
+          if (title?.trim()) {
+            foundAiTitle = title;
+          }
+        } else if (eventType === 'last-prompt') {
+          const prompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
+          if (prompt?.trim()) {
+            foundLastPrompt = prompt;
+          }
         }
       }
+
+      return foundCustomTitle || foundAiTitle || foundLastPrompt;
     } catch {
       // Ignore missing/unreadable files so sync can continue.
     }

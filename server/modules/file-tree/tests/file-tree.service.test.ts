@@ -1,21 +1,40 @@
 import assert from 'node:assert/strict';
+import { createReadStream } from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createFileTreeService } from '@/modules/file-tree/file-tree.service.js';
 import type {
   FileTreeDirectoryEntry,
   FileTreeFileSystem,
   FileTreeServiceDependencies,
+  FileTreeServices,
   FileTreeStats,
 } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/utils.js';
+
+const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 function createDirectoryEntry(name: string, directory: boolean): FileTreeDirectoryEntry {
   return {
     name,
     isDirectory: () => directory,
+  };
+}
+
+/**
+ * Adapts a path-keyed listing to the streaming directory contract so tests keep
+ * describing directories as plain arrays.
+ */
+function createDirectoryReader(
+  listDirectory: (directoryPath: string) => FileTreeDirectoryEntry[],
+): FileTreeFileSystem['openDirectory'] {
+  return async function* openDirectory(directoryPath) {
+    yield* listDirectory(directoryPath);
   };
 }
 
@@ -40,7 +59,9 @@ function createFakeFileSystem(
     access: unexpectedOperation,
     stat: unexpectedOperation,
     lstat: unexpectedOperation,
-    readdir: unexpectedOperation,
+    openDirectory: () => ({
+      [Symbol.asyncIterator]: () => ({ next: unexpectedOperation }),
+    }),
     realpath: unexpectedOperation,
     readTextFile: unexpectedOperation,
     writeTextFile: unexpectedOperation,
@@ -68,6 +89,7 @@ function createDependencies(
     workspace: {
       rootPath: projectRoot,
       validatePath: async (candidatePath) => ({ valid: true, resolvedPath: candidatePath }),
+      resolveReadOnlyRootPath: async () => null,
     },
     resolveMimeType: () => 'text/plain',
     fileSystemConcurrency: 4,
@@ -76,37 +98,67 @@ function createDependencies(
   };
 }
 
-test('listProjectFiles builds a sorted tree and skips generated directories', async () => {
+test('listProjectFiles applies gitignore alongside hard directory exclusions', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
+  const documentationDirectory = path.join(projectRoot, 'docs');
+  const buildDocumentationDirectory = path.join(documentationDirectory, 'build');
+  const gitDirectory = path.join(projectRoot, '.git');
+  const nodeModulesDirectory = path.join(projectRoot, 'node_modules');
   const sourceDirectory = path.join(projectRoot, 'src');
+  const readDirectories: string[] = [];
   const fileSystem = createFakeFileSystem({
     access: async () => undefined,
-    readdir: async (directoryPath) => {
+    readTextFile: async (filePath) => {
+      assert.equal(filePath, path.join(projectRoot, '.gitignore'));
+      return '*.log';
+    },
+    openDirectory: createDirectoryReader((directoryPath) => {
+      readDirectories.push(directoryPath);
       if (directoryPath === projectRoot) {
         return [
+          createDirectoryEntry('.git', true),
           createDirectoryEntry('node_modules', true),
           createDirectoryEntry('README.md', false),
+          createDirectoryEntry('docs', true),
           createDirectoryEntry('src', true),
         ];
+      }
+      if (directoryPath === documentationDirectory) {
+        return [createDirectoryEntry('build', true)];
+      }
+      if (directoryPath === buildDocumentationDirectory) {
+        return [createDirectoryEntry('foo.md', false)];
       }
       if (directoryPath === sourceDirectory) {
         return [createDirectoryEntry('index.ts', false)];
       }
       return [];
-    },
-    lstat: async (candidatePath) => createStats(candidatePath === sourceDirectory, 0o754),
+    }),
+    lstat: async (candidatePath) => createStats(
+      candidatePath === documentationDirectory
+        || candidatePath === buildDocumentationDirectory
+        || candidatePath === sourceDirectory
+        || candidatePath === gitDirectory
+        || candidatePath === nodeModulesDirectory,
+      0o754,
+    ),
   });
   const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
 
-  const tree = await service.listProjectFiles('project-1');
+  const tree = await service.listProjectFiles('project-1', { respectGitignore: true });
 
-  assert.deepEqual(tree.map((entry) => entry.name), ['src', 'README.md']);
-  const sourceEntry = tree[0];
+  assert.deepEqual(tree.map((entry) => entry.name), ['docs', 'src', 'README.md']);
+  const documentationEntry = tree[0];
+  assert.deepEqual(documentationEntry?.children?.map((entry) => entry.name), ['build']);
+  assert.deepEqual(documentationEntry?.children?.[0]?.children?.map((entry) => entry.name), ['foo.md']);
+  const sourceEntry = tree[1];
   assert.ok(sourceEntry);
   assert.equal(sourceEntry.type, 'directory');
   assert.equal(sourceEntry.permissions, '754');
   assert.equal(sourceEntry.permissionsRwx, 'rwxr-xr--');
   assert.deepEqual(sourceEntry.children?.map((entry) => entry.name), ['index.ts']);
+  assert.equal(readDirectories.includes(gitDirectory), false);
+  assert.equal(readDirectories.includes(nodeModulesDirectory), false);
 });
 
 test('listProjectFiles excludes gitignored entries only when requested', async () => {
@@ -120,7 +172,7 @@ test('listProjectFiles excludes gitignored entries only when requested', async (
       assert.equal(filePath, path.join(projectRoot, '.gitignore'));
       return ['*.log', '!keep.log', 'cache/', 'src/generated.ts'].join('\n');
     },
-    readdir: async (directoryPath) => {
+    openDirectory: createDirectoryReader((directoryPath) => {
       readDirectories.push(directoryPath);
       if (directoryPath === projectRoot) {
         return [
@@ -141,7 +193,7 @@ test('listProjectFiles excludes gitignored entries only when requested', async (
         ];
       }
       return [];
-    },
+    }),
     lstat: async (candidatePath) => createStats(
       candidatePath === cacheDirectory || candidatePath === sourceDirectory,
       0o644,
@@ -156,23 +208,130 @@ test('listProjectFiles excludes gitignored entries only when requested', async (
   assert.equal(readDirectories.includes(cacheDirectory), false);
 });
 
-test('listProjectFiles returns the normal tree when no gitignore exists', async () => {
+test('listProjectFiles falls back to conventional directory names when no gitignore exists', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
+  const documentationDirectory = path.join(projectRoot, 'docs');
+  const buildDocumentationDirectory = path.join(documentationDirectory, 'build');
+  const nodeModulesDirectory = path.join(projectRoot, 'node_modules');
+  const readDirectories: string[] = [];
   const fileSystem = createFakeFileSystem({
     access: async () => undefined,
     readTextFile: async () => {
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     },
-    readdir: async (directoryPath) => directoryPath === projectRoot
-      ? [createDirectoryEntry('debug.log', false)]
-      : [],
-    lstat: async () => createStats(false, 0o644),
+    openDirectory: createDirectoryReader((directoryPath) => {
+      readDirectories.push(directoryPath);
+      if (directoryPath === projectRoot) {
+        return [
+          createDirectoryEntry('debug.log', false),
+          createDirectoryEntry('docs', true),
+          createDirectoryEntry('node_modules', true),
+        ];
+      }
+      if (directoryPath === documentationDirectory) {
+        return [
+          createDirectoryEntry('build', true),
+          createDirectoryEntry('guide.md', false),
+        ];
+      }
+      if (directoryPath === buildDocumentationDirectory) {
+        return [createDirectoryEntry('generated.md', false)];
+      }
+      return [];
+    }),
+    lstat: async (candidatePath) => createStats(candidatePath === documentationDirectory, 0o644),
   });
   const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
 
   const tree = await service.listProjectFiles('project-1', { respectGitignore: true });
 
-  assert.deepEqual(tree.map((entry) => entry.name), ['debug.log']);
+  assert.deepEqual(tree.map((entry) => entry.name), ['docs', 'debug.log']);
+  assert.deepEqual(tree[0]?.children?.map((entry) => entry.name), ['guide.md']);
+  assert.equal(readDirectories.includes(nodeModulesDirectory), false);
+  assert.equal(readDirectories.includes(buildDocumentationDirectory), false);
+});
+
+test('listProjectFiles rejects a tree that exceeds the server entry limit', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    openDirectory: createDirectoryReader((directoryPath) => directoryPath === projectRoot
+      ? Array.from({ length: 10_001 }, (_, index) => createDirectoryEntry(`file-${index}.txt`, false))
+      : []),
+    lstat: async () => createStats(false, 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  await assert.rejects(
+    service.listProjectFiles('project-1'),
+    (error: unknown) => error instanceof AppError
+      && error.code === 'FILE_TREE_TOO_LARGE'
+      && error.statusCode === 413,
+  );
+});
+
+test('listProjectFiles abandons a directory stream as soon as the entry limit is passed', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  let streamedEntries = 0;
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    // Endless on purpose: the walk has to stop consuming the stream itself
+    // instead of waiting for the directory listing to be materialized.
+    openDirectory: async function* (directoryPath) {
+      if (directoryPath !== projectRoot) {
+        return;
+      }
+      for (let index = 0; ; index += 1) {
+        streamedEntries += 1;
+        yield createDirectoryEntry(`file-${index}.txt`, false);
+      }
+    },
+    lstat: async () => createStats(false, 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  await assert.rejects(
+    service.listProjectFiles('project-1'),
+    (error: unknown) => error instanceof AppError
+      && error.code === 'FILE_TREE_TOO_LARGE'
+      && error.statusCode === 413,
+  );
+  // The budget plus the single entry that proves it was exceeded.
+  assert.equal(streamedEntries, 10_001);
+});
+
+test('listProjectFiles shares the entry limit across nested directories', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const firstDirectory = path.join(projectRoot, 'first');
+  const secondDirectory = path.join(projectRoot, 'second');
+  const directoryPaths = new Set([firstDirectory, secondDirectory]);
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    openDirectory: createDirectoryReader((directoryPath) => {
+      if (directoryPath === projectRoot) {
+        return [
+          createDirectoryEntry('first', true),
+          createDirectoryEntry('second', true),
+        ];
+      }
+      if (directoryPaths.has(directoryPath)) {
+        return Array.from(
+          { length: 5_000 },
+          (_, index) => createDirectoryEntry(`${path.basename(directoryPath)}-${index}.txt`, false),
+        );
+      }
+      return [];
+    }),
+    lstat: async (candidatePath) => createStats(directoryPaths.has(candidatePath), 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  await assert.rejects(
+    service.listProjectFiles('project-1'),
+    (error: unknown) => error instanceof AppError
+      && error.code === 'FILE_TREE_TOO_LARGE'
+      && error.statusCode === 413,
+  );
 });
 
 test('readTextFile rejects traversal before invoking the filesystem adapter', async () => {
@@ -195,75 +354,6 @@ test('readTextFile rejects traversal before invoking the filesystem adapter', as
   assert.deepEqual(readPaths, []);
 });
 
-test('reads text and binary content from an extra readable root', async () => {
-  const projectRoot = path.resolve('file-tree-test-project');
-  const readableRoot = path.resolve('file-tree-test-readable');
-  const targetPath = path.join(readableRoot, 'preview.png');
-  const readPaths: string[] = [];
-  const fileSystem = createFakeFileSystem({
-    access: async (filePath) => { readPaths.push(filePath); },
-    readTextFile: async (filePath) => {
-      readPaths.push(filePath);
-      return 'preview';
-    },
-    createReadStream: (filePath) => {
-      readPaths.push(filePath);
-      return Readable.from(['preview']);
-    },
-  });
-  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [readableRoot]));
-
-  assert.deepEqual(await service.readTextFile('project-1', targetPath), {
-    content: 'preview',
-    path: targetPath,
-  });
-  await service.openFile('project-1', targetPath);
-  assert.deepEqual(readPaths, [targetPath, targetPath, targetPath]);
-});
-
-test('an extra readable root never permits writes', async () => {
-  const projectRoot = path.resolve('file-tree-test-project');
-  const readableRoot = path.resolve('file-tree-test-readable');
-  const targetPath = path.join(readableRoot, 'notes.txt');
-  const writes: string[] = [];
-  const fileSystem = createFakeFileSystem({
-    writeTextFile: async (filePath) => { writes.push(filePath); },
-  });
-  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [readableRoot]));
-
-  await assert.rejects(
-    service.saveTextFile('project-1', targetPath, 'no'),
-    (error: unknown) => error instanceof AppError && error.code === 'PATH_OUTSIDE_PROJECT',
-  );
-  assert.deepEqual(writes, []);
-});
-
-test('extra readable root containment rejects a sibling with the same prefix', async () => {
-  const projectRoot = path.resolve('file-tree-test-project');
-  const service = createFileTreeService(createDependencies(
-    createFakeFileSystem(),
-    projectRoot,
-    [path.resolve('/tmp')],
-  ));
-
-  await assert.rejects(
-    service.readTextFile('project-1', path.resolve('/tmpfoo/secret.txt')),
-    (error: unknown) => error instanceof AppError && error.code === 'PATH_OUTSIDE_PROJECT',
-  );
-});
-
-test('empty extra readable roots preserve rejection of paths outside the project', async () => {
-  const projectRoot = path.resolve('file-tree-test-project');
-  const service = createFileTreeService(createDependencies(createFakeFileSystem(), projectRoot));
-
-  await assert.rejects(
-    service.openFile('project-1', path.resolve('/tmp/preview.png')),
-    (error: unknown) => error instanceof AppError
-      && error.code === 'PATH_OUTSIDE_PROJECT'
-      && error.statusCode === 403,
-  );
-});
-
 test('relative extra readable roots are ignored and logged once', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
   const loggedErrors: string[] = [];
@@ -281,6 +371,26 @@ test('relative extra readable roots are ignored and logged once', async () => {
   assert.deepEqual(loggedErrors, [
     'Ignoring relative EXTRA_READABLE_ROOTS entry: "relative-root"',
   ]);
+});
+
+test('readTextFile reports a directory as a client error, not a 500', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const fileSystem = createFakeFileSystem({
+    readTextFile: async () => {
+      const error = new Error('EISDIR: illegal operation on a directory, read');
+      (error as NodeJS.ErrnoException).code = 'EISDIR';
+      throw error;
+    },
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  await assert.rejects(
+    service.readTextFile('project-1', 'decisions'),
+    (error: unknown) => error instanceof AppError
+      && error.code === 'EISDIR'
+      && error.statusCode === 400
+      && error.message === 'Path is a directory, not a file',
+  );
 });
 
 test('createEntry performs filesystem mutation only through the injected adapter', async () => {
@@ -308,4 +418,259 @@ test('createEntry performs filesystem mutation only through the injected adapter
 
   assert.equal(result.path, targetPath);
   assert.deepEqual(writtenFiles, [{ filePath: targetPath, content: '' }]);
+});
+
+/**
+ * Builds the service against the real filesystem and the real workspace policy,
+ * which is the only way to exercise the read-only roots: the whole guarantee
+ * rests on `realpath` resolving symlinks before the comparison.
+ */
+function createRealFileSystemService(
+  projectRoot: string,
+  workspaceRoot = projectRoot,
+  extraReadableRoots: readonly string[] = [],
+): FileTreeServices {
+  return createFileTreeService({
+    fileSystem: {
+      access: (candidatePath) => fsPromises.access(candidatePath),
+      stat: (candidatePath) => fsPromises.stat(candidatePath),
+      lstat: (candidatePath) => fsPromises.lstat(candidatePath),
+      openDirectory: async function* (directoryPath) {
+        yield* await fsPromises.opendir(directoryPath);
+      },
+      realpath: (candidatePath) => fsPromises.realpath(candidatePath),
+      readTextFile: (filePath) => fsPromises.readFile(filePath, 'utf8'),
+      writeTextFile: (filePath, content) => fsPromises.writeFile(filePath, content, 'utf8'),
+      async makeDirectory(directoryPath, recursive) {
+        await fsPromises.mkdir(directoryPath, { recursive });
+      },
+      rename: (oldPath, newPath) => fsPromises.rename(oldPath, newPath),
+      async removeDirectory(directoryPath) {
+        await fsPromises.rm(directoryPath, { recursive: true, force: true });
+      },
+      unlink: (filePath) => fsPromises.unlink(filePath),
+      copyFile: (source, destination) => fsPromises.copyFile(source, destination),
+      createReadStream: (filePath) => createReadStream(filePath),
+    },
+    projects: { getProjectPathById: async () => projectRoot },
+    workspace: {
+      rootPath: workspaceRoot,
+      validatePath: (candidatePath) => validateWorkspacePath(candidatePath),
+      resolveReadOnlyRootPath: (candidatePath) => resolveReadOnlyRootPath(candidatePath),
+    },
+    resolveMimeType: () => 'text/plain',
+    fileSystemConcurrency: 4,
+    extraReadableRoots,
+    logger: { error: () => undefined },
+  });
+}
+
+/**
+ * A real directory that is under none of the built-in readable roots (the temp
+ * directories, the Claude projects folder), so only `EXTRA_READABLE_ROOTS` can
+ * make it readable. Lives in the working directory and is removed afterwards.
+ */
+async function withDirectoryOutsideBuiltInRoots(
+  runTest: (directories: { readableRoot: string; siblingRoot: string }) => Promise<void>,
+): Promise<void> {
+  const readableRoot = await fsPromises.mkdtemp(path.join(process.cwd(), '.file-tree-extra-root-'));
+  const siblingRoot = `${readableRoot}-sibling`;
+  await fsPromises.mkdir(siblingRoot);
+  try {
+    await runTest({ readableRoot, siblingRoot });
+  } finally {
+    await fsPromises.rm(readableRoot, { recursive: true, force: true });
+    await fsPromises.rm(siblingRoot, { recursive: true, force: true });
+  }
+}
+
+test('an extra readable root can be read, but never written to', async () => {
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-'));
+  try {
+    await withDirectoryOutsideBuiltInRoots(async ({ readableRoot, siblingRoot }) => {
+      const previewPath = path.join(readableRoot, 'preview.txt');
+      await fsPromises.writeFile(previewPath, 'preview', 'utf8');
+      const siblingPath = path.join(siblingRoot, 'secret.txt');
+      await fsPromises.writeFile(siblingPath, 'secret', 'utf8');
+
+      const service = createRealFileSystemService(projectRoot, projectRoot, [readableRoot]);
+
+      const opened = await service.readTextFile('project-1', previewPath);
+      assert.equal(opened.content, 'preview');
+      const streamed = await service.openFile('project-1', previewPath);
+      streamed.stream.destroy();
+
+      await assert.rejects(
+        service.saveTextFile('project-1', previewPath, 'no'),
+        (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+      );
+      assert.equal(await fsPromises.readFile(previewPath, 'utf8'), 'preview');
+
+      // Containment is by path segment: a sibling sharing the root's prefix is outside it.
+      await assert.rejects(
+        service.readTextFile('project-1', siblingPath),
+        (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+      );
+    });
+  } finally {
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('without extra readable roots a path outside the project stays unreadable', async () => {
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-'));
+  try {
+    await withDirectoryOutsideBuiltInRoots(async ({ readableRoot }) => {
+      const previewPath = path.join(readableRoot, 'preview.txt');
+      await fsPromises.writeFile(previewPath, 'preview', 'utf8');
+
+      const service = createRealFileSystemService(projectRoot);
+
+      await assert.rejects(
+        service.openFile('project-1', previewPath),
+        (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT'
+          && (error as AppError).statusCode === 403,
+      );
+    });
+  } finally {
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('the temp directory can be browsed and read, but never written to', async () => {
+  const temporaryDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-tmp-'));
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-'));
+
+  try {
+    // The shape a task notification quotes: an agent's output file written to
+    // the system temp directory, outside every project.
+    await fsPromises.mkdir(path.join(temporaryDirectory, 'tasks'));
+    const outputPath = path.join(temporaryDirectory, 'tasks', 'agent.output');
+    await fsPromises.writeFile(outputPath, 'what the agent found', 'utf8');
+
+    const service = createRealFileSystemService(projectRoot);
+
+    const browsed = await service.browseWorkspace(temporaryDirectory);
+    assert.deepEqual(browsed.suggestions.map((entry) => entry.name), ['tasks']);
+
+    const opened = await service.readTextFile('project-1', outputPath);
+    assert.equal(opened.content, 'what the agent found');
+
+    const streamed = await service.openFile('project-1', outputPath);
+    streamed.stream.destroy();
+
+    // Read-only means read-only: nothing may be created or changed there.
+    await assert.rejects(
+      service.saveTextFile('project-1', outputPath, 'overwritten'),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    await assert.rejects(
+      service.createWorkspaceFolder(path.join(temporaryDirectory, 'new-folder')),
+      (error: unknown) => (error as AppError).code === 'INVALID_WORKSPACE_PATH',
+    );
+    await assert.rejects(
+      service.createEntry({
+        projectId: 'project-1',
+        parentPath: path.join(temporaryDirectory, 'tasks'),
+        type: 'file',
+        name: 'planted.txt',
+      }),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    await assert.rejects(
+      service.renameEntry({ projectId: 'project-1', oldPath: outputPath, newName: 'renamed.output' }),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    const uploadedTemporaryPath = path.join(projectRoot, 'upload.tmp');
+    await fsPromises.writeFile(uploadedTemporaryPath, 'upload', 'utf8');
+    await assert.rejects(
+      service.storeUploadedFiles({
+        projectId: 'project-1',
+        targetPath: path.join(temporaryDirectory, 'tasks'),
+        relativePaths: [],
+        requestedFileCount: 1,
+        files: [{ originalName: 'upload.txt', temporaryPath: uploadedTemporaryPath, size: 6, mimeType: 'text/plain' }],
+      }),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    await assert.rejects(
+      service.deleteEntry({ projectId: 'project-1', targetPath: outputPath }),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    assert.deepEqual(await fsPromises.readdir(path.join(temporaryDirectory, 'tasks')), ['agent.output']);
+    assert.equal(await fsPromises.readFile(outputPath, 'utf8'), 'what the agent found');
+  } finally {
+    await fsPromises.rm(temporaryDirectory, { recursive: true, force: true });
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('reading through a symlink out of the temp directory is still refused', async () => {
+  const temporaryDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-tmp-'));
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-'));
+  // The link target has to sit under no read-only root. Beside this file is
+  // deterministic; a directory under `$HOME` lands under `/tmp` whenever a
+  // test run isolates its home there, and the Claude projects directory is a
+  // read-only root too.
+  const outsideDirectory = await fsPromises.mkdtemp(path.join(testDirectory, 'file-tree-outside-'));
+
+  try {
+    assert.equal(await resolveReadOnlyRootPath(outsideDirectory), null);
+    await fsPromises.writeFile(path.join(outsideDirectory, 'secret.txt'), 'secret', 'utf8');
+    await fsPromises.symlink(outsideDirectory, path.join(temporaryDirectory, 'escape'));
+
+    const service = createRealFileSystemService(projectRoot);
+    await assert.rejects(
+      service.readTextFile('project-1', path.join(temporaryDirectory, 'escape', 'secret.txt')),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+  } finally {
+    await fsPromises.rm(temporaryDirectory, { recursive: true, force: true });
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+    await fsPromises.rm(outsideDirectory, { recursive: true, force: true });
+  }
+});
+
+test('a file in another folder of the workspace can be read, but never written to', async () => {
+  // Both sit beside this file, outside every read-only root, for the reason
+  // given in the symlink test above.
+  const workspaceRoot = await fsPromises.mkdtemp(path.join(testDirectory, 'file-tree-workspace-'));
+  const projectRoot = path.join(workspaceRoot, 'project');
+  const siblingDirectory = path.join(workspaceRoot, '.runs', 'run-1');
+  const outsideDirectory = await fsPromises.mkdtemp(path.join(testDirectory, 'file-tree-outside-'));
+
+  try {
+    await fsPromises.mkdir(projectRoot);
+    await fsPromises.mkdir(siblingDirectory, { recursive: true });
+    const reportPath = path.join(siblingDirectory, 'report.md');
+    await fsPromises.writeFile(reportPath, 'what the run found', 'utf8');
+    await fsPromises.writeFile(path.join(outsideDirectory, 'secret.txt'), 'secret', 'utf8');
+    await fsPromises.symlink(outsideDirectory, path.join(workspaceRoot, 'escape'));
+
+    const service = createRealFileSystemService(projectRoot, workspaceRoot);
+
+    const opened = await service.readTextFile('project-1', reportPath);
+    assert.equal(opened.content, 'what the run found');
+    const streamed = await service.openFile('project-1', reportPath);
+    streamed.stream.destroy();
+
+    await assert.rejects(
+      service.saveTextFile('project-1', reportPath, 'overwritten'),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    await assert.rejects(
+      service.deleteEntry({ projectId: 'project-1', targetPath: reportPath }),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    assert.equal(await fsPromises.readFile(reportPath, 'utf8'), 'what the run found');
+
+    // A link inside the workspace does not open what lies outside it.
+    await assert.rejects(
+      service.readTextFile('project-1', path.join(workspaceRoot, 'escape', 'secret.txt')),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+  } finally {
+    await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
+    await fsPromises.rm(outsideDirectory, { recursive: true, force: true });
+  }
 });

@@ -2,7 +2,7 @@
  * Detects a Claude session that is already held by a process this server does
  * not own, so the server never starts a second writer on it.
  *
- * Why this exists: typing into a session row makes the agent pool run
+ * Why this exists: typing into a session row makes the Claude runtime run
  * `claude --resume <id>`. When a tmux secretary (`claude --session-id <id>`) or
  * a terminal `claude --resume <id>` is already attached, that creates a second
  * process on one transcript — one that sees the whole history, believes it is
@@ -239,7 +239,7 @@ async function findForeignProcess(
       continue;
     }
     const ancestors = await ancestry(dependencies.procRoot, candidate.pid);
-    // This server's own SDK children (the agent pool, one-shot runs) are the
+    // This server's own SDK children (chat runs, held or not, and one-shot runs) are the
     // writer it is about to reuse, not a second one. A claude a user started
     // in one of this server's terminals is still foreign: it is not SDK-driven.
     if (ancestors.includes(dependencies.selfPid) && isSdkDriven(candidate.argv)) {
@@ -253,7 +253,7 @@ async function findForeignProcess(
 /**
  * Returns who holds `sessionId` outside this server, or null when it is free.
  *
- * Consumed by the Claude runtime (before the agent pool or a one-shot query
+ * Consumed by the Claude runtime (before a chat run or a one-shot query
  * resumes a session) and, through the providers barrel, by the shell websocket
  * (before a terminal runs `claude --resume`). Never throws: every probe that
  * fails degrades to "not held by that source".

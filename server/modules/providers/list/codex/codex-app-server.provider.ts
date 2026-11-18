@@ -225,8 +225,9 @@ function spawnCodexAppServer(cwd: string): ChildProcess {
  *
  * The process is short-lived on purpose: this prototype keeps the exec
  * transport's turn-scoped lifetime so nothing else about session handling
- * changes. Holding the connection open across turns (as the Claude agent pool
- * does) is the natural follow-up once the approval path is proven.
+ * changes. Holding the connection open across turns (as the Claude runtime
+ * holds its CLI for outstanding work) is the natural follow-up once the
+ * approval path is proven.
  */
 class CodexAppServerConnection {
   private child: ChildProcess | null = null;
@@ -262,7 +263,11 @@ class CodexAppServerConnection {
       this.settleTurn = (error) => {
         if (this.turnSettled) return;
         this.turnSettled = true;
-        error ? reject(error) : resolve();
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
       };
     });
 

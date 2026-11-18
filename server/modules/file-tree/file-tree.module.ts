@@ -15,7 +15,7 @@ import type {
   FileTreeProjectGateway,
   FileTreeWorkspaceGateway,
 } from '@/shared/types.js';
-import { WORKSPACES_ROOT, validateWorkspacePath } from '@/shared/utils.js';
+import { WORKSPACES_ROOT, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/utils.js';
 
 const MAXIMUM_UPLOAD_SIZE_MEGABYTES = 200;
 const MAXIMUM_UPLOAD_SIZE_BYTES = MAXIMUM_UPLOAD_SIZE_MEGABYTES * 1024 * 1024;
@@ -41,7 +41,11 @@ const fileTreeFileSystem: FileTreeFileSystem = {
   access: (candidatePath) => fsPromises.access(candidatePath),
   stat: (candidatePath) => fsPromises.stat(candidatePath),
   lstat: (candidatePath) => fsPromises.lstat(candidatePath),
-  readdir: (directoryPath) => fsPromises.readdir(directoryPath, { withFileTypes: true }),
+  // `opendir` streams entries in batches and the handle is closed by the
+  // iterator protocol, including when the caller stops early at the entry cap.
+  openDirectory: async function* (directoryPath) {
+    yield* await fsPromises.opendir(directoryPath);
+  },
   realpath: (candidatePath) => fsPromises.realpath(candidatePath),
   readTextFile: (filePath) => fsPromises.readFile(filePath, 'utf8'),
   writeTextFile: (filePath, content) => fsPromises.writeFile(filePath, content, 'utf8'),
@@ -74,6 +78,7 @@ const fileTreeProjects: FileTreeProjectGateway = {
 const fileTreeWorkspace: FileTreeWorkspaceGateway = {
   rootPath: WORKSPACES_ROOT,
   validatePath: (candidatePath) => validateWorkspacePath(candidatePath),
+  resolveReadOnlyRootPath: (candidatePath) => resolveReadOnlyRootPath(candidatePath),
 };
 
 const fileTreeLogger: FileTreeLogger = {

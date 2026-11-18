@@ -7,14 +7,141 @@ import type {
   ProviderModelOption,
   ProviderModelsDefinition,
 } from '@/shared/types.js';
-import { buildDefaultProviderCurrentActiveModel } from '@/shared/utils.js';
+import {
+  buildDefaultProviderCurrentActiveModel,
+  isPlaceholderProviderModel,
+  stripAnsiSequences,
+} from '@/shared/utils.js';
 
-export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
+/**
+ * Ultracode is not one of the SDK's reasoning-effort levels. Selecting it runs the turn at
+ * `xhigh` effort with standing dynamic-workflow orchestration, which the Claude runtime
+ * translates into the session-scoped `ultracode` setting. It is therefore only offered on
+ * models this catalog already marks as xhigh-capable.
+ */
+export const CLAUDE_ULTRACODE_EFFORT = 'ultracode';
+
+const ULTRACODE_EFFORT_OPTION = {
+  value: CLAUDE_ULTRACODE_EFFORT,
+  description: 'Highest effort plus standing workflow orchestration.',
+};
+
+const EFFORT_LEVELS_WITH_XHIGH = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+// Opus 4.6 and Sonnet 4.6 predate the xhigh level; Claude Code rejects it for them.
+const EFFORT_LEVELS_WITHOUT_XHIGH = ['low', 'medium', 'high', 'max'] as const;
+
+/**
+ * Builds the effort control for one pinned model version. The levels and default mirror the
+ * ones Claude Code's own model picker declares for that version, so an unchanged control sends
+ * the effort Claude Code would have used anyway. Ultracode is appended when asked for: Claude
+ * Code honours it only on xhigh-capable models. Arrays are built per call so options never
+ * share them.
+ */
+const buildPinnedModelEffort = (
+  defaultEffort: string,
+  levels: readonly string[],
+  { ultracode }: { ultracode: boolean },
+): NonNullable<ProviderModelOption['effort']> => ({
+  default: defaultEffort,
+  values: [
+    ...levels.map((value) => ({ value })),
+    ...(ultracode ? [ULTRACODE_EFFORT_OPTION] : []),
+  ],
+});
+
+/**
+ * Exact model versions, listed after the aliases above. An alias such as `opus` follows
+ * whichever release is newest; these stay on one release, which is what a user picks them for.
+ * The set matches the versions Claude Code's own model picker offers.
+ */
+const CLAUDE_PINNED_MODEL_OPTIONS: ProviderModelOption[] = [
+  {
+    value: 'claude-fable-5-2',
+    label: 'Fable 5.2',
+    description: 'Pinned to Fable 5.2, the current Fable release.',
+    effort: buildPinnedModelEffort('medium', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-fable-5-1',
+    label: 'Fable 5.1',
+    description: 'Pinned to Fable 5.1.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-fable-5',
+    label: 'Fable 5',
+    description: 'Pinned to Fable 5.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-opus-5-5',
+    label: 'Opus 5.5',
+    description: 'Pinned to Opus 5.5, the current Opus release.',
+    effort: buildPinnedModelEffort('medium', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-opus-5',
+    label: 'Opus 5',
+    description: 'Pinned to Opus 5.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-opus-4-8',
+    label: 'Opus 4.8',
+    description: 'Pinned to Opus 4.8.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-opus-4-7',
+    label: 'Opus 4.7',
+    description: 'Pinned to Opus 4.7.',
+    effort: buildPinnedModelEffort('xhigh', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-opus-4-6',
+    label: 'Opus 4.6',
+    description: 'Pinned to Opus 4.6.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITHOUT_XHIGH, { ultracode: false }),
+  },
+  {
+    value: 'claude-sonnet-5-5',
+    label: 'Sonnet 5.5',
+    description: 'Pinned to Sonnet 5.5, the current Sonnet release.',
+    effort: buildPinnedModelEffort('medium', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-sonnet-5',
+    label: 'Sonnet 5',
+    description: 'Pinned to Sonnet 5.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITH_XHIGH, { ultracode: true }),
+  },
+  {
+    value: 'claude-sonnet-4-6',
+    label: 'Sonnet 4.6',
+    description: 'Pinned to Sonnet 4.6.',
+    effort: buildPinnedModelEffort('high', EFFORT_LEVELS_WITHOUT_XHIGH, { ultracode: false }),
+  },
+  {
+    value: 'claude-haiku-5-5',
+    label: 'Haiku 5.5',
+    description: 'Pinned to Haiku 5.5, the current Haiku release.',
+    // Ultracode is left out for the same reason as on the `haiku` alias.
+    effort: buildPinnedModelEffort('medium', EFFORT_LEVELS_WITH_XHIGH, { ultracode: false }),
+  },
+  {
+    // Claude Code's picker sends the dated id for this release, so the catalog does too.
+    value: 'claude-haiku-4-5-20251001',
+    label: 'Haiku 4.5',
+    description: 'Pinned to Haiku 4.5. Has no effort control.',
+  },
+];
+
+export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
   OPTIONS: [
     {
       value: 'default',
       label: 'Default (recommended)',
-      description: 'Use the Claude Code default model (currently Sonnet 5)',
+      description: 'Use the recommended model for your Claude account and deployment.',
       effort: {
         default: 'high',
         values: [
@@ -22,13 +149,29 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
           { value: 'medium' },
           { value: 'high' },
           { value: 'max' },
+        ],
+      },
+    },
+    {
+      value: 'best',
+      label: 'Best available',
+      description: 'Use Fable when available, otherwise the latest Opus model.',
+      effort: {
+        default: 'high',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
         ],
       },
     },
     {
       value: 'fable',
       label: 'Fable',
-      description: 'Fable 5 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus',
+      description: 'Most capable Claude model for the hardest, longest-running tasks.',
       effort: {
         default: 'high',
         values: [
@@ -37,41 +180,46 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
           { value: 'high' },
           { value: 'xhigh' },
           { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
         ],
       },
     },
     {
-      value: "sonnet",
-      label: "Sonnet",
-      description: "Sonnet 5 · Best for everyday tasks · $3/$15 per Mtok",
+      value: 'sonnet',
+      label: 'Sonnet',
+      description: 'Latest Sonnet model for everyday coding tasks.',
       effort: {
         default: 'high',
         values: [
           { value: 'low' },
           { value: 'medium' },
           { value: 'high' },
+          { value: 'xhigh' },
           { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
         ],
       },
     },
     {
       value: 'sonnet[1m]',
       label: 'Sonnet (1M context)',
-      description: 'Sonnet 5 for long sessions · $3/$15 per Mtok',
+      description: 'Latest Sonnet model with a 1M context window.',
       effort: {
         default: 'high',
         values: [
           { value: 'low' },
           { value: 'medium' },
           { value: 'high' },
+          { value: 'xhigh' },
           { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
         ],
       },
     },
     {
       value: 'opus',
       label: 'Opus',
-      description: 'Opus 4.8 · Best for everyday, complex tasks · ~2× usage vs Sonnet',
+      description: 'Latest Opus model for complex reasoning and coding tasks.',
       effort: {
         default: 'high',
         values: [
@@ -80,13 +228,14 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
           { value: 'high' },
           { value: 'xhigh' },
           { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
         ],
       },
     },
     {
       value: 'opus[1m]',
-      label: 'Opus 4.8 (1M context)',
-      description: 'Opus 4.8 with 1M context · Most capable for complex work · $5/$25 per Mtok',
+      label: 'Opus (1M context)',
+      description: 'Latest Opus model with a 1M context window.',
       effort: {
         default: 'high',
         values: [
@@ -95,14 +244,45 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
           { value: 'high' },
           { value: 'xhigh' },
           { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
         ],
       },
     },
     {
       value: 'haiku',
       label: 'Haiku',
-      description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
+      description: 'Fast and efficient Claude model for simple tasks.',
+      // `medium` is the level Claude Code already runs Haiku at when none is sent, so
+      // sessions that predate this control keep the effort they have been running with.
+      // Ultracode is left out: standing workflow orchestration is not what Haiku is for.
+      effort: {
+        default: 'medium',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+        ],
+      },
     },
+    {
+      value: 'opusplan',
+      label: 'Opus Plan',
+      description: 'Use Opus while planning, then switch to Sonnet for execution.',
+      effort: {
+        default: 'high',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          ULTRACODE_EFFORT_OPTION,
+        ],
+      },
+    },
+    ...CLAUDE_PINNED_MODEL_OPTIONS,
   ],
   DEFAULT: 'default',
 };
@@ -113,7 +293,7 @@ export const findClaudeModelOption = (model: string | undefined | null): Provide
     return null;
   }
 
-  return CLAUDE_FALLBACK_MODELS.OPTIONS.find((option) => option.value === normalizedModel) ?? null;
+  return CLAUDE_PREDEFINED_MODELS.OPTIONS.find((option) => option.value === normalizedModel) ?? null;
 };
 type ClaudeInitEvent = {
   sessionId?: string;
@@ -127,14 +307,8 @@ type ClaudeInitEvent = {
   };
 };
 
-const ANSI_PATTERN = new RegExp(
-  '[\\u001B\\u009B][[\\]()#;?]*(?:'
-  + '(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]'
-  + '|(?:[\\dA-PR-TZcf-ntqry=><~]))',
-  'g',
-);
-
-const extractClaudeEventModel = (event: ClaudeInitEvent, sessionId: string): string | null => {
+/** Exported for tests. */
+export const extractClaudeEventModel = (event: ClaudeInitEvent, sessionId: string): string | null => {
   const eventSessionId = event.sessionId ?? event.session_id;
   if (eventSessionId && eventSessionId !== sessionId) {
     return null;
@@ -146,15 +320,13 @@ const extractClaudeEventModel = (event: ClaudeInitEvent, sessionId: string): str
   }
 
   const directModel = event.model?.trim();
-  if (directModel) {
+  if (directModel && !isPlaceholderProviderModel(directModel)) {
     return directModel;
   }
 
   const messageModel = event.message?.model?.trim();
-  return messageModel || null;
+  return messageModel && !isPlaceholderProviderModel(messageModel) ? messageModel : null;
 };
-
-const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, '');
 
 const extractTaggedContent = (content: string, tagName: string): string | null => {
   const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -165,15 +337,17 @@ const extractTaggedContent = (content: string, tagName: string): string | null =
 const extractClaudeModelFromTextContent = (content: string): string | null => {
   const localCommandStdout = extractTaggedContent(content, 'local-command-stdout');
   if (localCommandStdout !== null) {
-    const cleanedStdout = stripAnsi(localCommandStdout).replace(/\s+/g, ' ').trim();
+    const cleanedStdout = stripAnsiSequences(localCommandStdout).replace(/\s+/g, ' ').trim();
     const changedModel = /(?:set|changed|switched)\s+model\s+to\s+(.+?)\.?$/i.exec(cleanedStdout);
-    if (changedModel?.[1]?.trim()) {
-      return changedModel[1].trim();
+    const stdoutModel = changedModel?.[1]?.trim();
+    // A placeholder stdout hit must not shadow a real <model> tag further down.
+    if (stdoutModel && !isPlaceholderProviderModel(stdoutModel)) {
+      return stdoutModel;
     }
   }
 
   const modelTag = extractTaggedContent(content, 'model')?.trim();
-  return modelTag || null;
+  return modelTag && !isPlaceholderProviderModel(modelTag) ? modelTag : null;
 };
 
 const extractClaudeModelFromMessageContent = (content: unknown): string | null => {
@@ -190,6 +364,8 @@ const extractClaudeModelFromMessageContent = (content: unknown): string | null =
       continue;
     }
 
+    // extractClaudeModelFromTextContent rejects placeholders, so a placeholder
+    // part yields null here and a later part can still supply the real model.
     const model = extractClaudeModelFromTextContent(part.text);
     if (model) {
       return model;
@@ -237,7 +413,7 @@ export class ClaudeProviderModels implements IProviderModels {
     // const supportedModels = await queryInstance.supportedModels();
     // queryInstance.close();
     // return buildClaudeModelsDefinition(supportedModels);
-    return CLAUDE_FALLBACK_MODELS;
+    return CLAUDE_PREDEFINED_MODELS;
   }
 
   async getCurrentActiveModel(sessionId?: string): Promise<ProviderCurrentActiveModel> {

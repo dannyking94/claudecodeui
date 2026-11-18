@@ -21,8 +21,14 @@ import { sessionsDb } from '@/modules/database/index.js';
  * rewritten to `cli` after the fact.
  */
 
-/** Entrypoint values the VS Code extension treats as "SDK-driven" and hides. */
-const HIDDEN_ENTRYPOINTS = ['sdk-cli', 'sdk-ts', 'sdk-py'] as const;
+/**
+ * Entrypoint values rewritten to `cli`. The first three are the ones the VS
+ * Code extension treats as "SDK-driven" and hides. `claudecodeui` is the label
+ * the Claude runtime passes in `CLAUDE_CODE_ENTRYPOINT`: a CLI that honours the
+ * variable stamps it instead of `sdk-cli`, and `cli` is the one value known to
+ * keep a transcript listed.
+ */
+const HIDDEN_ENTRYPOINTS = ['sdk-cli', 'sdk-ts', 'sdk-py', 'claudecodeui'] as const;
 
 /** What an interactive `claude` invocation stamps; the extension shows those. */
 const VISIBLE_ENTRYPOINT = 'cli';

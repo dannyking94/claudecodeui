@@ -56,7 +56,7 @@ Each provider lives under its own folder in `server/modules/providers/list/`:
 ```text
 server/modules/providers/list/<provider>/
   <provider>.provider.ts
-  <provider>-runtime.provider.js
+  <provider>-runtime.provider.ts
   <provider>-auth.provider.ts
   <provider>-models.provider.ts
   <provider>-mcp.provider.ts
@@ -80,7 +80,7 @@ import the service from `server/modules/providers/index.ts`.
 | --- | --- | --- |
 | `runtime` | Run and abort live SDK/CLI sessions | `IProviderRuntime` -> `providerRuntimeService` |
 | `models` | Resolve supported and active models | `IProviderModels` -> `providerModelsService` |
-| `auth` | Report install/auth state for the provider runtime | `IProviderAuth` -> `providerAuthService` |
+| `auth` | Report install/auth state and the CLI version for the provider runtime | `IProviderAuth` -> `providerAuthService`, `providerCliService` |
 | `mcp` | Read, list, write, and remove provider-native MCP config | `McpProvider` -> `providerMcpService` |
 | `skills` | Discover provider-native skill markdown files | `SkillsProvider` -> `providerSkillsService` |
 | `sessions` | Normalize live events and fetch session history | `IProviderSessions` -> `sessionsService` |
@@ -91,59 +91,36 @@ import the service from `server/modules/providers/index.ts`.
 - `sessions` handles runtime event normalization and history fetches.
 - `sessionSynchronizer` handles file-backed session indexing into `sessionsDb`.
 
-### Persistent Runtime Sessions
+### Loop Wakeups On A Held Claude Process
 
-A runtime may keep its provider process alive between turns instead of starting
-one per message. Claude does, because the scheduling primitives behind `/loop`
-(`CronCreate`, `ScheduleWakeup`) are session-scoped and in-memory: a job is gone
-when the process exits, and only fires while the agent is idle. See
-`claude-agent-pool.provider.js`.
+The Claude runtime holds a turn's CLI process open after `result` whenever the
+turn left work outstanding (see the `BG_WAIT_CEILING_MS` notes in
+`claude-runtime.provider.ts`). That hold is what lets a self-paced `/loop`
+tick at all: `ScheduleWakeup` keeps its job in the subprocess's memory, and the
+job only fires while that process sits idle.
 
-Persistent runtimes change three contracts:
-
-- `abort(sessionId)` interrupts the current turn only. Use `endSession(sessionId)`
-  to discard the session and whatever it had scheduled.
-- Turns can arrive with no `chat.send` behind them. `setSpontaneousRunOpener`
-  installs the chat-layer hook that gives such a turn a run and a writer; the
-  chat layer announces it to clients with a `run_started` frame.
-- `shutdown()` must release every held process; `server/index.ts` calls it on
-  SIGINT/SIGTERM.
-
-Chat runs are the only pooled path — they have a stable app session id to key on
-and a websocket that can receive scheduled turns later. SSE and agent-route
-callers stay one-shot.
-
-Because a pooled process outlives the turn that created it, it can reach a state
-the pool cannot otherwise detect: alive, stream open, but no longer consuming
-input. The turn then queues forever, `runTurn` never settles, and the chat layer
-holds its run open — which refuses every later `chat.send` for that session, so
-the session looks like a chat that answers nothing. Three timeouts bound that:
+Holding the process is necessary but not sufficient. Under the SDK transport a
+short wakeup fires and a long one routinely does not, with the CLI still
+considering it pending, so nothing reports an error on either side.
+`claude-loop-wakeup.provider.ts` therefore records when each armed wakeup is
+due and delivers the tick itself, into the held stdin, once the CLI has clearly
+missed it:
 
 | Variable | Default | Guards |
 | --- | --- | --- |
-| `CLOUDCLI_CLAUDE_TURN_START_TIMEOUT_MS` | `120000` | A pushed turn that produces no output at all. Fails the turn and replaces the agent. Only the first frame is timed — once the agent answers, a turn may run as long as it needs. |
-| `CLOUDCLI_CLAUDE_STALLED_TURN_MS` | `1800000` | A turn that started and then went silent, including a scheduled one nobody is waiting on. The sweeper expires the agent, which settles the turn. |
-| `CLOUDCLI_CLAUDE_INTERRUPT_TIMEOUT_MS` | `10000` | An agent that will not acknowledge an interrupt, so Stop can never be a button that does nothing. |
+| `CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS` | `90000` | How long past a wakeup's due time to wait for the CLI before delivering the tick from here. Absorbs the CLI rounding a delay up to the next minute, plus scheduler lag, so a wakeup that does fire is not raced. |
 
-The rule these encode: a session must always become usable again on its own. Any
-new pooled path needs the same guarantee.
+Three rules follow from it:
 
-#### Keeping a dynamic `/loop` ticking
+- An armed wakeup holds the process past the idle ceiling. The CLI accepts
+  delays up to an hour, which is longer than the ceiling allows silence for.
+- A turn that takes the session over adopts the wakeup the superseded process
+  had armed. That wakeup died with the process, so the new one will never fire
+  it; the tick is delivered into the new process when it comes due.
+- The delivery is cancelled when the model stops the loop (`stop: true`) and
+  when the user aborts a turn — the CLI drops pending wakeups on abort too.
 
-Holding the process open is necessary but not sufficient for a self-paced
-`/loop`, which survives only if each tick arms the next one *and* that armed
-wakeup fires. Both fail silently under the SDK transport, so the pool tracks the
-loop itself and delivers the tick when the CLI does not:
-
-| Variable | Default | Guards |
-| --- | --- | --- |
-| `CLOUDCLI_CLAUDE_LOOP_KEEPALIVE_MS` | `1200000` | A tick that armed nothing, which ends the loop as far as the CLI is concerned. The CLI's own guard for this is REPL-only. Budget: one free tick — a loop that declines to re-arm even then is over. |
-| `CLOUDCLI_CLAUDE_WAKEUP_GRACE_MS` | `90000` | A wakeup that was armed and never fired: the job is held in the subprocess's memory and only runs in the idle window between turns, and long delays routinely pass with nothing happening. Counted from when the wakeup was due; absorbs the CLI's rounding to the next minute so a wakeup that does fire is not raced. |
-
-A tick delivered for a missed wakeup is the loop working, so it does not spend
-the keepalive budget. Both are cancelled when the model stops the loop, when a
-turn is interrupted (the CLI drops pending wakeups on abort), and when the agent
-closes. Both also ask the tick to report where things stand: a turn that only
+The delivered tick asks the turn to say where things stand: one that only
 inspects, acts and re-arms renders as tool calls followed by a new wakeup, which
 is indistinguishable in the UI from a loop spinning on nothing.
 
@@ -166,7 +143,7 @@ is indistinguishable in the UI from a loop spinning on nothing.
 2. Create the wrapper class.
 
 - Add `server/modules/providers/list/<provider>/<provider>.provider.ts`.
-- Add `server/modules/providers/list/<provider>/<provider>-runtime.provider.js`
+- Add `server/modules/providers/list/<provider>/<provider>-runtime.provider.ts`
   when the provider supports live SDK/CLI execution.
 - Extend `AbstractProvider`.
 - Expose readonly `auth`, `mcp`, `skills`, `sessions`, and `sessionSynchronizer`.
@@ -175,6 +152,10 @@ is indistinguishable in the UI from a loop spinning on nothing.
 3. Implement auth.
 
 - Return a full `ProviderAuthStatus`.
+- Implement `checkInstalled()` with `probeCliVersion(...)` on the CLI the runtime
+  actually runs; it fills `installed` and `installedVersion`, and the CLI
+  update service reads versions through it. A CLI that updates itself can be
+  added to `CLI_UPDATERS` in `services/provider-cli.service.ts`.
 - Treat normal `not installed` / `not authenticated` states as data, not exceptions.
 - Keep provider-specific credential discovery inside the auth provider.
 - If the provider has no auth step, return a stable unauthenticated or not-installed status instead of omitting the facet.
@@ -275,7 +256,7 @@ Current session sync roots are:
 
 If the provider can run live chat sessions, update the runtime entrypoints too:
 
-- `server/modules/providers/list/<provider>/<provider>-runtime.provider.js`
+- `server/modules/providers/list/<provider>/<provider>-runtime.provider.ts`
 - `server/modules/providers/list/<provider>/<provider>.provider.ts`
 - `server/modules/agent/agent.routes.ts`
 - `server/index.ts`
@@ -376,7 +357,7 @@ Add a new provider "<provider>" using the current provider module architecture.
 Requirements:
 1) Create:
     - server/modules/providers/list/<provider>/<provider>.provider.ts
-    - server/modules/providers/list/<provider>/<provider>-runtime.provider.js
+    - server/modules/providers/list/<provider>/<provider>-runtime.provider.ts
    - server/modules/providers/list/<provider>/<provider>-auth.provider.ts
    - server/modules/providers/list/<provider>/<provider>-models.provider.ts
    - server/modules/providers/list/<provider>/<provider>-mcp.provider.ts

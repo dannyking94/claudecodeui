@@ -1,6 +1,5 @@
 import path from 'node:path';
 
-import { DEFAULT_CLAUDE_CONTEXT_WINDOW } from '@/shared/claude-context-window.js';
 import type {
   CliApplication,
   CliEnvironment,
@@ -78,27 +77,7 @@ function isNewerVersion(candidateVersion: string, currentVersion: string): boole
   return false;
 }
 
-function loadEnvironmentFile(dependencies: CliServiceDependencies): void {
-  try {
-    const environmentFile = dependencies.fileSystem.readTextFile(
-      path.join(dependencies.applicationRoot, '.env'),
-    );
-    for (const line of environmentFile.split('\n')) {
-      const trimmedLine = line.trim();
-      if (!trimmedLine || trimmedLine.startsWith('#')) continue;
-
-      const [key, ...valueParts] = trimmedLine.split('=');
-      if (key && valueParts.length > 0 && !dependencies.environment[key]) {
-        dependencies.environment[key] = valueParts.join('=').trim();
-      }
-    }
-  } catch {
-    // The repository-level .env file is optional for every CLI command.
-  }
-}
-
 function showStatus(dependencies: CliServiceDependencies): void {
-  loadEnvironmentFile(dependencies);
   const { environment, fileSystem, output } = dependencies;
   const databasePath = environment.DATABASE_PATH || dependencies.defaultDatabasePath;
   const databaseExists = fileSystem.pathExists(databasePath);
@@ -126,7 +105,7 @@ function showStatus(dependencies: CliServiceDependencies): void {
   output.log(`       SERVER_PORT: ${terminalTextStyles.bright(environment.SERVER_PORT || environment.PORT || '3001')} ${terminalTextStyles.dim(environment.SERVER_PORT || environment.PORT ? '' : '(default)')}`);
   output.log(`       DATABASE_PATH: ${terminalTextStyles.dim(environment.DATABASE_PATH || '(using default location)')}`);
   output.log(`       CLAUDE_CLI_PATH: ${terminalTextStyles.dim(environment.CLAUDE_CLI_PATH || 'claude (default)')}`);
-  output.log(`       CONTEXT_WINDOW: ${terminalTextStyles.dim(environment.CONTEXT_WINDOW || `${DEFAULT_CLAUDE_CONTEXT_WINDOW} (default)`)}`);
+  output.log(`       CONTEXT_WINDOW: ${terminalTextStyles.dim(environment.CONTEXT_WINDOW || '160000 (default)')}`);
   output.log(`\n${terminalTextStyles.info('[INFO]')} Claude Projects Folder:`);
   output.log(`       ${terminalTextStyles.dim(claudeProjectsPath)}`);
   output.log(`       Status: ${fileSystem.pathExists(claudeProjectsPath)
@@ -181,7 +160,7 @@ Environment Variables:
   PORT                Set server port (default: 3001) (LEGACY)
   DATABASE_PATH       Set custom database location
   CLAUDE_CLI_PATH     Set custom Claude CLI path
-  CONTEXT_WINDOW      Set context window size (default: ${DEFAULT_CLAUDE_CONTEXT_WINDOW})
+  CONTEXT_WINDOW      Fallback context window size (default: 160000)
 
 Documentation:
   ${dependencies.packageMetadata.homepage || 'https://github.com/siteboon/claudecodeui'}

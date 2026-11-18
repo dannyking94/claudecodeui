@@ -7,7 +7,6 @@ import TOML from '@iarna/toml';
 import type { IProviderModels } from '@/shared/interfaces.js';
 import type {
   ProviderCurrentActiveModel,
-  ProviderModelOption,
   ProviderModelsDefinition,
 } from '@/shared/types.js';
 import {
@@ -16,267 +15,175 @@ import {
   readOptionalString,
 } from '@/shared/utils.js';
 
-const CODEX_GPT_56_EFFORT_VALUES = [
-  { value: 'none' },
-  { value: 'low' },
-  { value: 'medium' },
-  { value: 'high' },
-  { value: 'xhigh' },
-  { value: 'max' },
-];
-
-const CODEX_GPT_6_ASTRA_EFFORT_VALUES = [
-  { value: 'low' },
-  { value: 'medium' },
-  { value: 'high' },
-  { value: 'xhigh' },
-  { value: 'max' },
-];
-
-const CODEX_LEGACY_EFFORT_VALUES = [
-  { value: 'low' },
-  { value: 'medium' },
-  { value: 'high' },
-  { value: 'xhigh' },
-];
-
-export const CODEX_FALLBACK_MODELS: ProviderModelsDefinition = {
+/** Curated Codex catalog shipped as immutable CloudCLI defaults. */
+export const CODEX_PREDEFINED_MODELS: ProviderModelsDefinition = {
+  // Chats run the bundled `@openai/codex` CLI, which takes model metadata from
+  // its own bundled catalog (`codex debug models --bundled`), from a slug-prefix
+  // match against that catalog, or (signed in to ChatGPT) from OpenAI's remote
+  // catalog; anything else runs on fallback metadata. So every entry must be
+  // one of the bundled catalog's exact slugs, which codex-models.test.ts checks.
   OPTIONS: [
     {
       value: 'gpt-6-astra',
       label: 'GPT-6 Astra',
-      description: 'GPT-6 flagship model for the hardest end-to-end work.',
+      description: 'Our most capable model for complex, demanding work.',
       effort: {
-        default: 'medium',
-        values: CODEX_GPT_6_ASTRA_EFFORT_VALUES,
+        default: 'low',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          { value: 'ultra' },
+        ],
       },
     },
     {
-      value: 'gpt-5.6',
-      label: 'gpt-5.6',
-      description: 'Alias for gpt-5.6-sol.',
+      value: 'gpt-6.1-sol',
+      label: 'GPT-6.1 Sol',
+      description: 'Latest workhorse model for coding and everyday work.',
+      effort: {
+        default: 'low',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          { value: 'ultra' },
+        ],
+      },
+    },
+    {
+      value: 'gpt-6.1-terra',
+      label: 'GPT-6.1 Terra',
+      description: 'Balanced agentic coding model for everyday work.',
+      effort: {
+        default: 'low',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          { value: 'ultra' },
+        ],
+      },
+    },
+    {
+      value: 'gpt-6-sol',
+      label: 'GPT-6 Sol',
+      description: 'Workhorse model for coding and everyday work.',
       effort: {
         default: 'medium',
-        values: CODEX_GPT_56_EFFORT_VALUES,
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          { value: 'ultra' },
+        ],
+      },
+    },
+    {
+      value: 'gpt-6-luna',
+      label: 'GPT-6 Luna',
+      description: 'Fast and affordable model for easier tasks.',
+      effort: {
+        default: 'medium',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+        ],
       },
     },
     {
       value: 'gpt-5.6-sol',
-      label: 'gpt-5.6-sol',
-      description: 'GPT-5.6 frontier model for complex professional work.',
+      label: 'GPT-5.6 Sol',
+      description: 'Latest frontier agentic coding model.',
       effort: {
-        default: 'medium',
-        values: CODEX_GPT_56_EFFORT_VALUES,
+        default: 'low',
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          { value: 'ultra' },
+        ],
       },
     },
     {
       value: 'gpt-5.6-terra',
-      label: 'gpt-5.6-terra',
-      description: 'GPT-5.6 model balancing intelligence and cost.',
+      label: 'GPT-5.6 Terra',
+      description: 'Balanced agentic coding model for everyday work.',
       effort: {
         default: 'medium',
-        values: CODEX_GPT_56_EFFORT_VALUES,
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+          { value: 'ultra' },
+        ],
       },
     },
     {
       value: 'gpt-5.6-luna',
-      label: 'gpt-5.6-luna',
-      description: 'GPT-5.6 model for cost-sensitive workloads.',
+      label: 'GPT-5.6 Luna',
+      description: 'Fast and affordable agentic coding model.',
       effort: {
         default: 'medium',
-        values: CODEX_GPT_56_EFFORT_VALUES,
+        values: [
+          { value: 'low' },
+          { value: 'medium' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+        ],
       },
     },
     {
       value: 'gpt-5.5',
-      label: 'gpt-5.5',
+      label: 'GPT-5.5',
+      description: 'Frontier model for complex coding, research, and real-world work.',
       effort: {
         default: 'medium',
-        values: CODEX_LEGACY_EFFORT_VALUES,
-      },
-    },
-    {
-      value: 'gpt-5.4',
-      label: 'gpt-5.4',
-      effort: {
-        default: 'medium',
-        values: CODEX_LEGACY_EFFORT_VALUES,
-      },
-    },
-    {
-      value: 'gpt-5.4-mini',
-      label: 'gpt-5.4-mini',
-      effort: {
-        default: 'medium',
-        values: CODEX_LEGACY_EFFORT_VALUES,
+        values: [{ value: 'low' }, { value: 'medium' }, { value: 'high' }, { value: 'xhigh' }],
       },
     },
   ],
-  DEFAULT: 'gpt-5.6',
+  DEFAULT: 'gpt-5.6-sol',
 };
 
-type CodexCachedModel = {
-  slug?: string;
-  display_name?: string;
-  description?: string;
-  priority?: number;
-  visibility?: string;
-  supported_in_api?: boolean;
-  default_reasoning_level?: string;
-  supported_reasoning_levels?: Array<{
-    effort?: string;
-    description?: string;
-  }>;
-};
-
-const CODEX_MODELS_CACHE_PATH = path.join(os.homedir(), '.codex', 'models_cache.json');
 const CODEX_CONFIG_PATH = path.join(os.homedir(), '.codex', 'config.toml');
 
-const isCodexCachedModel = (value: unknown): value is CodexCachedModel => {
-  const record = readObjectRecord(value);
-  return Boolean(record && readOptionalString(record.slug));
-};
-
-const readCodexPriority = (value: unknown): number => (
-  typeof value === 'number' && Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER
-);
-
-const mapCodexModel = (model: CodexCachedModel): ProviderModelOption => {
-  const effortValues = Array.isArray(model.supported_reasoning_levels)
-    ? model.supported_reasoning_levels
-      .map((level) => {
-        const value = readOptionalString(level?.effort);
-        if (!value) {
-          return null;
-        }
-
-        return {
-          value,
-          description: readOptionalString(level?.description),
-        };
-      })
-      .filter((level): level is NonNullable<typeof level> => Boolean(level))
-    : [];
-
-  return {
-    value: model.slug as string,
-    label: readOptionalString(model.display_name) ?? (model.slug as string),
-    description: readOptionalString(model.description),
-    effort: effortValues.length > 0
-      ? {
-          default: readOptionalString(model.default_reasoning_level) ?? undefined,
-          values: effortValues,
-        }
-      : undefined,
-  };
-};
-
-/**
- * Provider tests use this builder to verify Codex cache parsing and fallback
- * merging without reading a real `~/.codex/models_cache.json` file.
- *
- * `configuredModel` is the `model` from `~/.codex/config.toml`. It becomes the
- * DEFAULT — that is the model the user's own Codex CLI runs, so it is the one
- * known to work for their account — and is added as an option when the cache
- * does not list it (the catalog can lag the config, or fail to parse at all).
- */
-export const buildCodexModelsDefinition = (
-  models: CodexCachedModel[],
-  configuredModel?: string | null,
-): ProviderModelsDefinition => {
-  const sortedModels = [...models]
-    .filter((model) => model.visibility === 'list' && model.supported_in_api !== false)
-    .sort((left, right) => readCodexPriority(left.priority) - readCodexPriority(right.priority));
-
-  const options: ProviderModelOption[] = [];
-  const seenValues = new Set<string>();
-  const normalizedConfiguredModel = configuredModel?.trim() || null;
-
-  for (const model of sortedModels) {
-    const mappedModel = mapCodexModel(model);
-    if (seenValues.has(mappedModel.value)) {
-      continue;
-    }
-
-    seenValues.add(mappedModel.value);
-    options.push(mappedModel);
-  }
-
-  for (const fallbackModel of CODEX_FALLBACK_MODELS.OPTIONS) {
-    if (seenValues.has(fallbackModel.value)) {
-      continue;
-    }
-
-    seenValues.add(fallbackModel.value);
-    options.push(fallbackModel);
-  }
-
-  if (normalizedConfiguredModel) {
-    if (!seenValues.has(normalizedConfiguredModel)) {
-      options.unshift({
-        value: normalizedConfiguredModel,
-        label: normalizedConfiguredModel,
-        description: 'Configured in ~/.codex/config.toml.',
-      });
-    }
-
-    return {
-      OPTIONS: options,
-      DEFAULT: normalizedConfiguredModel,
-    };
-  }
-
-  if (options.length === 0) {
-    return CODEX_FALLBACK_MODELS;
-  }
-
-  const defaultValue = options.find((option) => option.value === CODEX_FALLBACK_MODELS.DEFAULT)?.value
-    ?? options[0]?.value
-    ?? CODEX_FALLBACK_MODELS.DEFAULT;
-
-  return {
-    OPTIONS: options,
-    DEFAULT: defaultValue,
-  };
-};
-
-/** Reads `model` from `~/.codex/config.toml`; null when unset or unreadable. */
-const readConfiguredCodexModel = async (): Promise<string | null> => {
-  try {
-    const raw = await readFile(CODEX_CONFIG_PATH, 'utf8');
-    const parsed = readObjectRecord(TOML.parse(raw));
-    return readOptionalString(parsed?.model) ?? null;
-  } catch {
-    return null;
-  }
-};
-
-const readCachedCodexModels = async (): Promise<CodexCachedModel[]> => {
-  try {
-    const raw = await readFile(CODEX_MODELS_CACHE_PATH, 'utf8');
-    const parsed = readObjectRecord(JSON.parse(raw));
-    return Array.isArray(parsed?.models)
-      ? parsed.models.filter(isCodexCachedModel)
-      : [];
-  } catch {
-    return [];
-  }
-};
-
+/** Provider registry model adapter for Codex predefined models and active config. */
 export class CodexProviderModels implements IProviderModels {
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
-    // An empty cache still merges the fallbacks, so this never comes back empty.
-    return buildCodexModelsDefinition(await readCachedCodexModels(), await readConfiguredCodexModel());
+    return CODEX_PREDEFINED_MODELS;
   }
 
   async getCurrentActiveModel(): Promise<ProviderCurrentActiveModel> {
-    const model = await readConfiguredCodexModel();
-    if (!model) {
+    try {
+      const raw = await readFile(CODEX_CONFIG_PATH, 'utf8');
+      const parsed = readObjectRecord(TOML.parse(raw));
+      const model = readOptionalString(parsed?.model);
+      if (!model) {
+        return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
+      }
+
+      return {
+        model,
+      };
+    } catch {
       return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
     }
-
-    return {
-      model,
-    };
   }
 }

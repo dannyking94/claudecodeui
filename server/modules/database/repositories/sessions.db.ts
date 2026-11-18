@@ -2,6 +2,7 @@ import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import type { SessionChangeSignature, SessionParentRef } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
+import type { ClearedContextSegment, SessionForkAncestor } from '@/shared/types.js';
 
 type SessionRow = {
   session_id: string;
@@ -18,13 +19,22 @@ type SessionRow = {
   custom_name: string | null;
   /** Model this session runs with; NULL until the app records one for it. */
   model: string | null;
+  /** Reasoning effort this session runs with; NULL until the app records one. */
+  effort: string | null;
+  /** The app session this one was branched from; NULL unless it is a fork. */
+  forked_from_session_id: string | null;
   isArchived: number;
   created_at: string;
   updated_at: string;
 };
 
+type RecentSessionsPage = {
+  sessions: SessionRow[];
+  total: number;
+};
+
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, parent_session_id, project_path, jsonl_path, custom_name, model, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, parent_session_id, project_path, jsonl_path, custom_name, model, effort, forked_from_session_id, isArchived, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -74,7 +84,9 @@ export const sessionsDb = {
    * The given id is the provider-native session id. Rows are keyed by
    * `provider_session_id` so a session that was first created by the app
    * (with an app-allocated `session_id`) is updated in place once its
-   * transcript shows up on disk, instead of producing a duplicate row.
+   * transcript shows up on disk, instead of producing a duplicate row. An
+   * app-created row keeps its existing name; synchronizer names only update
+   * rows that were themselves created by indexing provider storage.
    *
    * `parent_session_id` is deliberately absent from every write below. Nothing
    * on disk describes session nesting, so a rescan has no value to contribute
@@ -115,14 +127,19 @@ export const sessionsDb = {
            updated_at = COALESCE(?, CURRENT_TIMESTAMP),
            project_path = ?,
            jsonl_path = ?,
-           isArchived = 0,
-           custom_name = COALESCE(?, custom_name)
+           isArchived = CASE WHEN ? IS NULL OR julianday(?) > julianday(updated_at) THEN 0 ELSE isArchived END,
+           custom_name = CASE
+             WHEN session_id <> provider_session_id AND custom_name IS NOT NULL THEN custom_name
+             ELSE COALESCE(?, custom_name)
+           END
          WHERE session_id = ?`
       ).run(
         provider,
         updatedAtValue,
         normalizedProjectPath,
         jsonlPath ?? null,
+        updatedAtValue,
+        updatedAtValue,
         customName ?? null,
         existing.session_id
       );
@@ -142,8 +159,12 @@ export const sessionsDb = {
          updated_at = excluded.updated_at,
          project_path = excluded.project_path,
          jsonl_path = excluded.jsonl_path,
-         isArchived = 0,
-         custom_name = COALESCE(excluded.custom_name, sessions.custom_name)`
+         isArchived = CASE WHEN ? IS NULL OR julianday(excluded.updated_at) > julianday(sessions.updated_at) THEN 0 ELSE sessions.isArchived END,
+         custom_name = CASE
+           WHEN sessions.session_id <> sessions.provider_session_id AND sessions.custom_name IS NOT NULL
+             THEN sessions.custom_name
+           ELSE COALESCE(excluded.custom_name, sessions.custom_name)
+         END`
     ).run(
       providerSessionId,
       provider,
@@ -152,6 +173,7 @@ export const sessionsDb = {
       normalizedProjectPath,
       jsonlPath ?? null,
       createdAtValue,
+      updatedAtValue,
       updatedAtValue
     );
 
@@ -164,9 +186,15 @@ export const sessionsDb = {
    * The session gateway uses this when the frontend starts a brand-new chat:
    * `session_id` is the stable app-facing id, while `provider_session_id`
    * stays NULL until the provider runtime announces its own id and
-   * `assignProviderSessionId` records the mapping.
+   * `assignProviderSessionId` records the mapping. `customName` is derived
+   * from the first visible CloudCLI message by the sessions service.
    */
-  createAppSession(sessionId: string, provider: string, projectPath: string): string {
+  createAppSession(
+    sessionId: string,
+    provider: string,
+    projectPath: string,
+    customName?: string,
+  ): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
@@ -174,10 +202,59 @@ export const sessionsDb = {
 
     db.prepare(
       `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, NULL, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, normalizedProjectPath);
+       VALUES (?, ?, NULL, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run(sessionId, provider, customName ?? null, normalizedProjectPath);
 
     return sessionId;
+  },
+
+  /**
+   * Inserts a session that already has its provider artifact on disk.
+   *
+   * Unlike `createAppSession` this writes `provider_session_id` and
+   * `jsonl_path` immediately, because a fork's transcript file exists before
+   * the row does — and the filesystem watcher would otherwise index it as an
+   * unrelated session under its own id.
+   */
+  createForkedSession(input: {
+    sessionId: string;
+    provider: string;
+    projectPath: string;
+    customName: string | null;
+    providerSessionId: string;
+    jsonlPath: string;
+    forkedFromSessionId: string;
+    model: string | null;
+    effort: string | null;
+  }): string {
+    const db = getConnection();
+    const normalizedProjectPath = normalizeProjectPathForProvider(input.provider, input.projectPath);
+
+    projectsDb.createProjectPath(normalizedProjectPath);
+
+    // The watcher may already have created a row for the new transcript. Its
+    // id is the provider-native one, which is what this row claims, so replace
+    // it rather than leaving two sidebar entries for one conversation.
+    db.transaction(() => {
+      db.prepare('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?')
+        .run(input.providerSessionId, input.sessionId);
+      db.prepare(
+        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, forked_from_session_id, isArchived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      ).run(
+        input.sessionId,
+        input.provider,
+        input.providerSessionId,
+        input.customName,
+        normalizedProjectPath,
+        input.jsonlPath,
+        input.model,
+        input.effort,
+        input.forkedFromSessionId,
+      );
+    })();
+
+    return input.sessionId;
   },
 
   /**
@@ -231,6 +308,200 @@ export const sessionsDb = {
     });
 
     merge();
+  },
+
+  /**
+   * Moves one session onto a different provider session and transcript.
+   *
+   * Only editing a message on a provider that has to branch to rewind (Codex)
+   * does this — an ordinary run keeps the same provider session for its whole
+   * life. `assignProviderSessionId` cannot be used for it: that one keeps the
+   * existing `jsonl_path` on purpose, so a session repointed with it would
+   * claim the new thread while still reading the old transcript.
+   *
+   * The watcher may already have indexed the new transcript under its own id.
+   * That row is the same conversation this one is about to become, so it is
+   * replaced rather than left behind as a second sidebar entry.
+   */
+  repointSessionToProviderSession(
+    sessionId: string,
+    input: { providerSessionId: string; jsonlPath: string },
+  ): void {
+    const db = getConnection();
+
+    db.transaction(() => {
+      db.prepare('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?')
+        .run(input.providerSessionId, sessionId);
+      db.prepare(
+        `UPDATE sessions SET
+           provider_session_id = ?,
+           jsonl_path = ?,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE session_id = ?`
+      ).run(input.providerSessionId, input.jsonlPath, sessionId);
+    })();
+  },
+
+  /**
+   * Detaches a session from its provider session so the next run starts a new
+   * one.
+   *
+   * Used when an edit replaces the very first prompt: there is no conversation
+   * left to branch from, so the session starts over instead.
+   */
+  detachProviderSession(sessionId: string): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions SET
+         provider_session_id = NULL,
+         jsonl_path = NULL,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE session_id = ?`
+    ).run(sessionId);
+  },
+
+  /**
+   * Clears a session's context: retires its provider session as an earlier
+   * part of the conversation and detaches the session, so the next run starts
+   * a new provider session that knows nothing of what came before.
+   *
+   * One transaction, so the session is never seen detached from a transcript
+   * that is not yet recorded as its history — a reader in between would show
+   * an empty conversation, and the indexer would take the transcript for a
+   * session of its own. Returns false, changing nothing, when the session has
+   * no provider session to retire.
+   */
+  clearProviderSessionContext(sessionId: string): boolean {
+    const db = getConnection();
+
+    return db.transaction(() => {
+      const session = db
+        .prepare('SELECT provider, provider_session_id, jsonl_path FROM sessions WHERE session_id = ?')
+        .get(sessionId) as Pick<SessionRow, 'provider' | 'provider_session_id' | 'jsonl_path'> | undefined;
+      if (!session?.provider_session_id) {
+        return false;
+      }
+
+      sessionsDb.markProviderSessionSuperseded({
+        providerSessionId: session.provider_session_id,
+        provider: session.provider,
+        sessionId,
+        jsonlPath: session.jsonl_path,
+        reason: 'context_cleared',
+      });
+      sessionsDb.detachProviderSession(sessionId);
+      return true;
+    })();
+  },
+
+  /**
+   * The provider sessions a session's context was cleared off, oldest first:
+   * the earlier parts of its conversation, in the order they happened.
+   */
+  getClearedContextSegments(sessionId: string): ClearedContextSegment[] {
+    const db = getConnection();
+    const rows = db
+      .prepare(
+        `SELECT provider_session_id, jsonl_path, created_at FROM superseded_provider_sessions
+         WHERE session_id = ? AND reason = 'context_cleared'
+         ORDER BY created_at ASC, rowid ASC`
+      )
+      .all(sessionId) as Array<{ provider_session_id: string; jsonl_path: string | null; created_at: string }>;
+
+    return rows.map((row) => ({
+      providerSessionId: row.provider_session_id,
+      jsonlPath: row.jsonl_path,
+      clearedAt: normalizeTimestamp(row.created_at) ?? row.created_at,
+    }));
+  },
+
+  /**
+   * Records that a session has left a provider session behind for good.
+   *
+   * The transcript stays on disk, which is deliberate — the abandoned attempt
+   * is recoverable — but the indexer must not offer it back, and on a session
+   * discovered from disk (whose app id *is* the provider id) rediscovering it
+   * would repoint the row at the conversation the user edited away from.
+   */
+  markProviderSessionSuperseded(input: {
+    providerSessionId: string;
+    provider: string;
+    sessionId: string;
+    jsonlPath: string | null;
+    /** Defaults to 'edit': a discarded version, never read back as history. */
+    reason?: 'edit' | 'context_cleared';
+  }): void {
+    const db = getConnection();
+    db.prepare(
+      `INSERT INTO superseded_provider_sessions (provider_session_id, provider, session_id, jsonl_path, reason)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(provider_session_id, provider) DO UPDATE SET
+         session_id = excluded.session_id,
+         jsonl_path = excluded.jsonl_path,
+         reason = excluded.reason,
+         created_at = CURRENT_TIMESTAMP`
+    ).run(input.providerSessionId, input.provider, input.sessionId, input.jsonlPath, input.reason ?? 'edit');
+  },
+
+  /**
+   * Fills in the transcript path of a provider session a session has left,
+   * when it was left before the indexer had seen its file.
+   *
+   * A session can be cleared seconds after its first turn, while its row
+   * still has no \`jsonl_path\`; the record of what it left behind then has
+   * none either, and that path is the only way the earlier conversation is
+   * read back and, later, deleted from disk. A path already recorded is kept.
+   */
+  recordSupersededTranscriptPath(providerSessionId: string, provider: string, jsonlPath: string): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE superseded_provider_sessions SET jsonl_path = ?
+       WHERE provider_session_id = ? AND provider = ? AND jsonl_path IS NULL`
+    ).run(jsonlPath, providerSessionId, provider);
+  },
+
+  isProviderSessionSuperseded(providerSessionId: string, provider: string): boolean {
+    const db = getConnection();
+    const row = db
+      .prepare(
+        `SELECT 1 AS found FROM superseded_provider_sessions
+         WHERE provider_session_id = ? AND provider = ?
+         LIMIT 1`
+      )
+      .get(providerSessionId, provider) as { found: number } | undefined;
+
+    return Boolean(row);
+  },
+
+  /**
+   * Transcripts one session has left behind, for the caller that deletes a
+   * conversation from disk.
+   *
+   * A conversation edited more than once has lived in more than one file, and
+   * the session row only ever points at the newest.
+   */
+  getSupersededTranscriptPaths(sessionId: string): string[] {
+    const db = getConnection();
+    const rows = db
+      .prepare(
+        `SELECT jsonl_path FROM superseded_provider_sessions
+         WHERE session_id = ? AND jsonl_path IS NOT NULL`
+      )
+      .all(sessionId) as Array<{ jsonl_path: string }>;
+
+    return rows.map((row) => row.jsonl_path);
+  },
+
+  /**
+   * Forgets what a session left behind, once the session itself is gone.
+   *
+   * Without this the record outlives the row it was written for and keeps the
+   * indexer refusing a transcript that no longer belongs to anything — a
+   * conversation invisible to the app and impossible to delete through it.
+   */
+  clearSupersededProviderSessions(sessionId: string): void {
+    const db = getConnection();
+    db.prepare('DELETE FROM superseded_provider_sessions WHERE session_id = ?').run(sessionId);
   },
 
   /**
@@ -369,6 +640,21 @@ export const sessionsDb = {
     }));
   },
 
+  /**
+   * Records the reasoning effort one session runs with.
+   *
+   * `default` is stored as an explicit choice rather than NULL so reopening
+   * the session does not inherit a later per-provider effort preference.
+   */
+  setSessionEffort(sessionId: string, effort: string): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions
+       SET effort = ?
+       WHERE session_id = ?`
+    ).run(effort, sessionId);
+  },
+
   updateSessionCustomName(sessionId: string, customName: string): void {
     const db = getConnection();
     db.prepare(
@@ -391,6 +677,36 @@ export const sessionsDb = {
       .get(sessionId) as SessionRow | undefined;
 
     return normalizeSessionRow(row) ?? null;
+  },
+
+  /**
+   * Projects and WebSocket summaries use this context to connect a paginated
+   * fork to its parents without adding those parents to the page itself.
+   * UNION deduplicates rows even if damaged metadata contains a cycle. Stop
+   * at archived, missing, cross-project or cross-provider parents.
+   */
+  getForkAncestors(sessionId: string): SessionForkAncestor[] {
+    const rows = getConnection().prepare(
+      `WITH RECURSIVE fork_ancestors AS (
+         SELECT * FROM sessions WHERE session_id = ? AND isArchived = 0
+         UNION
+         SELECT parent.* FROM sessions AS parent
+         JOIN fork_ancestors AS child
+           ON parent.session_id = child.forked_from_session_id
+          AND parent.project_path = child.project_path
+          AND parent.provider = child.provider
+         WHERE parent.isArchived = 0
+       )
+       SELECT ${SESSION_ROW_COLUMNS} FROM fork_ancestors WHERE session_id <> ?`
+    ).all(sessionId, sessionId) as SessionRow[];
+
+    return normalizeSessionRows(rows).map((row) => ({
+      id: row.session_id,
+      provider: row.provider as SessionForkAncestor['provider'],
+      summary: row.custom_name || '',
+      lastActivity: row.updated_at ?? row.created_at,
+      forkedFromSessionId: row.forked_from_session_id,
+    }));
   },
 
   /**
@@ -463,6 +779,46 @@ export const sessionsDb = {
       .all() as SessionRow[];
 
     return normalizeSessionRows(rows);
+  },
+
+  /**
+   * Returns one globally ordered page of visible conversations.
+   *
+   * Pagination happens after archived sessions and sessions belonging to an
+   * archived project have been excluded. This keeps the sidebar feed complete
+   * and correctly ordered across projects instead of flattening only the
+   * per-project slices already loaded by the client.
+   */
+  getRecentSessionsPage(limit: number, offset: number): RecentSessionsPage {
+    const db = getConnection();
+    const visibilityClause = `
+      sessions.isArchived = 0
+      AND (projects.isArchived IS NULL OR projects.isArchived = 0)
+    `;
+    const rows = db
+      .prepare(
+        `SELECT sessions.*
+         FROM sessions
+         LEFT JOIN projects ON projects.project_path = sessions.project_path
+         WHERE ${visibilityClause}
+         ORDER BY julianday(COALESCE(sessions.updated_at, sessions.created_at)) DESC,
+                  sessions.session_id DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(limit, offset) as SessionRow[];
+    const countRow = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM sessions
+         LEFT JOIN projects ON projects.project_path = sessions.project_path
+         WHERE ${visibilityClause}`
+      )
+      .get() as { count: number } | undefined;
+
+    return {
+      sessions: normalizeSessionRows(rows),
+      total: Number(countRow?.count ?? 0),
+    };
   },
 
   /**
@@ -583,5 +939,33 @@ export const sessionsDb = {
   deleteSessionById(sessionId: string): boolean {
     const db = getConnection();
     return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+  },
+
+  /** Used by the OpenCode synchronizer to remove indexed child sessions by their native id. */
+  deleteSessionByProviderSessionId(providerSessionId: string, provider: string): boolean {
+    const db = getConnection();
+    return db
+      .prepare('DELETE FROM sessions WHERE provider_session_id = ? AND provider = ?')
+      .run(providerSessionId, provider).changes > 0;
+  },
+
+  /**
+   * Lists every indexed session that claims a transcript file on disk.
+   *
+   * Only rows with a `jsonl_path` are returned, which deliberately excludes
+   * app-created sessions still waiting for their first provider write and
+   * OpenCode rows (whose transcripts all live inside one shared sqlite file).
+   * Used by the session synchronizer to find rows whose transcript has been
+   * deleted underneath the index.
+   */
+  getSessionsWithTranscriptPath(): Array<{ session_id: string; jsonl_path: string }> {
+    const db = getConnection();
+    return db
+      .prepare(
+        `SELECT session_id, jsonl_path
+         FROM sessions
+         WHERE jsonl_path IS NOT NULL AND jsonl_path <> ''`
+      )
+      .all() as Array<{ session_id: string; jsonl_path: string }>;
   },
 };
