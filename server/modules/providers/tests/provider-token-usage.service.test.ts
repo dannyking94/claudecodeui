@@ -88,6 +88,7 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
           type: 'token_count',
           info: {
             total_token_usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 },
+            last_token_usage: { input_tokens: 30, output_tokens: 5, total_tokens: 35 },
             model_context_window: 250_000,
           },
           rate_limits: {
@@ -107,11 +108,11 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
     });
 
     assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
-      used: 49,
+      used: 35,
       total: 250_000,
-      inputTokens: 40,
-      outputTokens: 9,
-      breakdown: { input: 40, output: 9 },
+      inputTokens: 30,
+      outputTokens: 5,
+      breakdown: { input: 30, output: 5 },
       accountUsage: {
         fiveHour: null,
         sevenDay: {

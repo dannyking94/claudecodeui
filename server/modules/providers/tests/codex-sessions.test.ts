@@ -190,3 +190,38 @@ test('Codex history renders Promise.all shell wrappers as Bash activity', { conc
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+test('Codex history exposes background compaction as a visible timeline message', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'codex-compaction-history-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  await mkdir(workspacePath, { recursive: true });
+  const restoreHomeDir = patchHomeDir(tempRoot);
+
+  try {
+    const providerSessionId = 'codex-compaction-1';
+    const transcriptPath = await writeCodexTranscript(tempRoot, providerSessionId, workspacePath);
+    await writeFile(transcriptPath, [
+      JSON.stringify({ type: 'session_meta', payload: { id: providerSessionId, cwd: workspacePath } }),
+      JSON.stringify({
+        timestamp: '2026-09-02T01:07:26.338Z',
+        type: 'compacted',
+        payload: { window_number: 3, replacement_history: [{ secret: 'must not render' }] },
+      }),
+    ].join('\n') + '\n', 'utf8');
+
+    await withIsolatedDatabase(async () => {
+      sessionsDb.createAppSession('app-compaction-1', 'codex', workspacePath);
+      sessionsDb.assignProviderSessionId('app-compaction-1', providerSessionId);
+      await new CodexSessionSynchronizer().synchronize();
+
+      const history = await new CodexSessionsProvider().fetchHistory('app-compaction-1');
+      assert.equal(history.messages.length, 1);
+      assert.equal(history.messages[0].content, 'Context compacted in background (window 3).');
+      assert.equal(history.messages[0].role, 'assistant');
+      assert.equal(history.messages[0].isCompactSummary, true);
+    });
+  } finally {
+    restoreHomeDir();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});

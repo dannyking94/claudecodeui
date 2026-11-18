@@ -43,6 +43,25 @@ test('Codex token usage includes a weekly-only account percentage', () => {
   });
 });
 
+test('Codex persisted token usage reports current context instead of cumulative session traffic', () => {
+  const result = extractCodexTokenBudget({
+    type: 'token_count',
+    info: {
+      total_token_usage: { input_tokens: 27_000_000, output_tokens: 100_000, total_tokens: 27_100_000 },
+      last_token_usage: { input_tokens: 54_000, output_tokens: 126, total_tokens: 54_126 },
+      model_context_window: 258_400,
+    },
+  });
+
+  assert.deepEqual(result, {
+    used: 54_126,
+    total: 258_400,
+    inputTokens: 54_000,
+    outputTokens: 126,
+    breakdown: { input: 54_000, output: 126 },
+  });
+});
+
 test('Codex token usage classifies five-hour and weekly pressure independently', () => {
   const result = extractCodexTokenBudget({
     info: {

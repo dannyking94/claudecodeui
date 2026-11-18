@@ -25,6 +25,14 @@ const CODEX_GPT_56_EFFORT_VALUES = [
   { value: 'max' },
 ];
 
+const CODEX_GPT_6_ASTRA_EFFORT_VALUES = [
+  { value: 'low' },
+  { value: 'medium' },
+  { value: 'high' },
+  { value: 'xhigh' },
+  { value: 'max' },
+];
+
 const CODEX_LEGACY_EFFORT_VALUES = [
   { value: 'low' },
   { value: 'medium' },
@@ -34,6 +42,15 @@ const CODEX_LEGACY_EFFORT_VALUES = [
 
 export const CODEX_FALLBACK_MODELS: ProviderModelsDefinition = {
   OPTIONS: [
+    {
+      value: 'gpt-6-astra',
+      label: 'GPT-6 Astra',
+      description: 'GPT-6 flagship model for the hardest end-to-end work.',
+      effort: {
+        default: 'medium',
+        values: CODEX_GPT_6_ASTRA_EFFORT_VALUES,
+      },
+    },
     {
       value: 'gpt-5.6',
       label: 'gpt-5.6',

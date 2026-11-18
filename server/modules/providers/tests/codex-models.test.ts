@@ -6,11 +6,17 @@ import {
   CODEX_FALLBACK_MODELS,
 } from '@/modules/providers/list/codex/codex-models.provider.js';
 
-test('Codex fallback models include the GPT-5.6 family with current effort values', () => {
+test('Codex fallback models include GPT-6 Astra and the GPT-5.6 family with current effort values', () => {
   assert.equal(CODEX_FALLBACK_MODELS.DEFAULT, 'gpt-5.6');
   assert.deepEqual(
-    CODEX_FALLBACK_MODELS.OPTIONS.slice(0, 4).map((option) => option.value),
-    ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    CODEX_FALLBACK_MODELS.OPTIONS.slice(0, 5).map((option) => option.value),
+    ['gpt-6-astra', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+  );
+
+  const astra = CODEX_FALLBACK_MODELS.OPTIONS.find((option) => option.value === 'gpt-6-astra');
+  assert.deepEqual(
+    astra?.effort?.values.map((value) => value.value),
+    ['low', 'medium', 'high', 'xhigh', 'max'],
   );
 
   const gpt56 = CODEX_FALLBACK_MODELS.OPTIONS.find((option) => option.value === 'gpt-5.6');
@@ -48,6 +54,7 @@ test('Codex model cache results are merged with current fallback models', () => 
     'GPT-5.5 from cache',
   );
   assert.ok(definition.OPTIONS.some((option) => option.value === 'gpt-5.6'));
+  assert.ok(definition.OPTIONS.some((option) => option.value === 'gpt-6-astra'));
   assert.ok(!definition.OPTIONS.some((option) => option.value === 'hidden-model'));
   assert.equal(new Set(definition.OPTIONS.map((option) => option.value)).size, definition.OPTIONS.length);
 });

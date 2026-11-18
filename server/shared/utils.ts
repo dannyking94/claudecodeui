@@ -560,7 +560,14 @@ export function extractCodexTokenBudget(value: unknown): CodexTokenBudget | null
   const info = readObjectRecord(event?.info)
     ?? readObjectRecord(payload?.info)
     ?? readObjectRecord(eventUsage?.info);
-  const usage = readObjectRecord(info?.total_token_usage)
+  // Persisted Codex token_count events carry both the cumulative session bill
+  // and the current context-window occupancy. The UI budget must use the latter;
+  // otherwise a long-lived compacted session appears to exceed its context limit.
+  const usage = readObjectRecord(info?.last_token_usage)
+    ?? readObjectRecord(info?.lastTokenUsage)
+    ?? readObjectRecord(eventUsage?.last_token_usage)
+    ?? readObjectRecord(eventUsage?.lastTokenUsage)
+    ?? readObjectRecord(info?.total_token_usage)
     ?? readObjectRecord(eventUsage?.total_token_usage)
     ?? readObjectRecord(eventUsage?.total)
     ?? eventUsage;

@@ -277,6 +277,21 @@ async function getCodexSessionMessages(
           tokenUsage = extractCodexTokenBudget(entry.payload) ?? tokenUsage;
         }
 
+        if (entry.type === 'compacted') {
+          const windowNumber = Number(entry.payload?.window_number);
+          messages.push({
+            type: 'assistant',
+            timestamp: entry.timestamp,
+            message: {
+              role: 'assistant',
+              content: Number.isFinite(windowNumber) && windowNumber > 0
+                ? `Context compacted in background (window ${windowNumber}).`
+                : 'Context compacted in background.',
+            },
+            isCompactSummary: true,
+          });
+        }
+
         if (
           entry.type === 'event_msg'
           && entry.payload?.type === 'sub_agent_activity'
@@ -693,6 +708,7 @@ export class CodexSessionsProvider implements IProviderSessions {
         kind: 'text',
         role: 'assistant',
         content,
+        isCompactSummary: raw.isCompactSummary === true,
       })];
     }
 
