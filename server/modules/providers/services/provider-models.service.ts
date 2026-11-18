@@ -17,7 +17,9 @@ import type {
 export const PROVIDER_MODELS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 // Increment when a provider's bundled catalog changes so deployed clients do not
 // keep serving an otherwise-valid persisted catalog that predates the release.
-const PROVIDER_MODELS_CACHE_VERSION = 4;
+// v5: the Codex DEFAULT now follows ~/.codex/config.toml; v4 entries (already
+// written by the live server) still pin gpt-5.6.
+const PROVIDER_MODELS_CACHE_VERSION = 5;
 const UNCACHED_PROVIDERS = new Set<LLMProvider>(['claude']);
 
 /** Session-row access the service needs, narrowed so tests can stub it. */

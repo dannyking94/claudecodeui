@@ -88,6 +88,7 @@ function ChatInterface({
     providerModelsRefreshing,
     hardRefreshProviderModels,
     selectProviderModel,
+    handleProviderModelRejected,
     setStoredProviderEffort,
     resolvePermissionModeForProvider,
   } = useChatProviderState({
@@ -270,6 +271,7 @@ function ChatInterface({
     onSessionIdle,
     onWebSocketReconnect: handleWebSocketReconnect,
     onUnrequestedRunStarted: handleUnrequestedRunStarted,
+    onProviderModelRejected: handleProviderModelRejected,
     sessionStore,
   });
 

@@ -27,7 +27,12 @@ import {
   isCodexAppServerEnabled,
   queryCodexViaAppServer,
 } from '@/modules/providers/list/codex/codex-app-server.provider.js';
-import { createCompleteMessage, createNormalizedMessage, extractCodexTokenBudget } from '@/shared/utils.js';
+import {
+  createCompleteMessage,
+  createNormalizedMessage,
+  extractCodexTokenBudget,
+  parseCodexTurnError,
+} from '@/shared/utils.js';
 
 const activeCodexSessions = new Map();
 
@@ -248,10 +253,36 @@ export async function queryCodex(command, options = {}, ws, context) {
   let capturedSessionId = providerSessionId;
   let sessionCreatedSent = false;
   let terminalFailure = null;
+  // A top-level stream `error` (e.g. the API rejecting the model). `turn.failed`
+  // normally follows and is what gets rendered; this is the fallback when a
+  // turn ends without one and without any agent reply.
+  let lastStreamError = null;
+  let sawAgentMessage = false;
   const abortController = new AbortController();
   // Session-map key: the app session id when the caller supplied one, else
   // the provider-native thread id once captured (legacy/direct API callers).
   const sessionKey = () => sessionId || capturedSessionId || null;
+
+  /** Renders a stream error as the turn's error row, notifies, and returns it as the failure. */
+  const surfaceStreamError = (rawError) => {
+    const failure = parseCodexTurnError(rawError);
+    sendMessage(ws, createNormalizedMessage({
+      kind: 'error',
+      content: failure.message,
+      sessionId: capturedSessionId || sessionId || null,
+      provider: 'codex',
+      ...(failure.code ? { errorCode: failure.code, model: resolvedModel } : {}),
+    }));
+    const failureError = new Error(failure.message);
+    notifyRunFailed({
+      userId: ws?.userId || null,
+      provider: 'codex',
+      sessionId: sessionId || capturedSessionId || null,
+      sessionName: sessionSummary,
+      error: failureError
+    });
+    return failureError;
+  };
 
   try {
     codex = new Codex();
@@ -332,12 +363,21 @@ export async function queryCodex(command, options = {}, ws, context) {
         continue;
       }
 
+      if (event.type === 'error') {
+        lastStreamError = event.message ?? null;
+        continue;
+      }
+      if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
+        sawAgentMessage = true;
+      }
+
       const transformed = transformCodexEvent(event);
 
       // Normalize the transformed event into NormalizedMessage(s) via adapter
       const normalizedMsgs = context.normalizeMessage(transformed, capturedSessionId || sessionId || null);
       for (const msg of normalizedMsgs) {
-        sendMessage(ws, msg);
+        // Name the rejected model so the client can drop that stored choice.
+        sendMessage(ws, msg.kind === 'error' && msg.errorCode ? { ...msg, model: resolvedModel } : msg);
       }
 
       if (event.type === 'turn.failed' && !terminalFailure) {
@@ -359,6 +399,10 @@ export async function queryCodex(command, options = {}, ws, context) {
           sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
         }
       }
+    }
+
+    if (!terminalFailure && lastStreamError !== null && !sawAgentMessage) {
+      terminalFailure = surfaceStreamError(lastStreamError);
     }
 
     // Send the terminal completion event — skipped for aborted runs, whose
@@ -393,13 +437,21 @@ export async function queryCodex(command, options = {}, ws, context) {
     if (!wasAborted) {
       console.error('[Codex] Error:', error);
 
-      // Check if Codex SDK is available for a clearer error message
-      const installed = await context.isProviderInstalled();
-      const errorContent = !installed
-        ? 'Codex CLI is not configured. Please set up authentication first.'
-        : error.message;
+      if (!terminalFailure && lastStreamError !== null) {
+        // The SDK throws "Codex Exec exited with code 1" after a rejected
+        // request; the stream's own error says why, so show that instead.
+        terminalFailure = surfaceStreamError(lastStreamError);
+      } else if (!terminalFailure) {
+        // Check if Codex SDK is available for a clearer error message
+        const installed = await context.isProviderInstalled();
+        const errorContent = !installed
+          ? 'Codex CLI is not configured. Please set up authentication first.'
+          : error.message;
 
-      sendMessage(ws, createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
+        sendMessage(ws, createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
+      }
+      // A `turn.failed` already rendered its reason; the SDK's follow-up
+      // "exited with code 1" throw would only duplicate it.
       sendMessage(ws, createCompleteMessage({
         provider: 'codex',
         sessionId: capturedSessionId || sessionId || null,

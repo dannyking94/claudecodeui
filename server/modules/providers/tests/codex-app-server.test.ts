@@ -301,3 +301,116 @@ test('a denied approval is reported to Codex as decline', async () => {
     'a resumed thread must not re-announce a session',
   );
 });
+
+/**
+ * A fake `codex app-server` replaying what the real one sends when the API
+ * rejects the model (captured from codex-cli 0.144 with a ChatGPT account): a
+ * non-retried `error` notification, then `turn/completed` with
+ * `turn.status: "failed"`. Before the fix this ended the chat with nothing.
+ */
+function spawnModelRejectingAppServer(options: { turnCarriesError: boolean }): ChildProcess {
+  const events = new EventEmitter();
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let buffer = '';
+  let killed = false;
+  const apiError = {
+    message: JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: {
+        type: 'invalid_request_error',
+        message: "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.",
+        code: 'model_not_found',
+      },
+    }),
+    codexErrorInfo: 'other',
+    additionalDetails: null,
+  };
+
+  const send = (message: AnyRecord) => stdout.write(`${JSON.stringify(message)}\n`);
+  stdin.on('data', (chunk: Buffer) => {
+    buffer += chunk.toString('utf8');
+    let newline = buffer.indexOf('\n');
+    while (newline !== -1) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf('\n');
+      if (!line) continue;
+
+      const message = JSON.parse(line) as AnyRecord;
+      if (message.method === 'initialize' || message.method === 'account/rateLimits/read') {
+        send({ jsonrpc: '2.0', id: message.id, result: {} });
+      } else if (message.method === 'thread/start' || message.method === 'thread/resume') {
+        send({ jsonrpc: '2.0', id: message.id, result: { thread: { id: 'thread-rejected' } } });
+      } else if (message.method === 'turn/start') {
+        send({ jsonrpc: '2.0', id: message.id, result: { turn: { id: 't1', status: 'inProgress' } } });
+        send({
+          jsonrpc: '2.0',
+          method: 'error',
+          params: { error: apiError, willRetry: false, threadId: 'thread-rejected', turnId: 't1' },
+        });
+        send({
+          jsonrpc: '2.0',
+          method: 'turn/completed',
+          params: {
+            threadId: 'thread-rejected',
+            turn: {
+              id: 't1',
+              items: [],
+              status: options.turnCarriesError ? 'failed' : 'completed',
+              error: options.turnCarriesError ? apiError : null,
+            },
+          },
+        });
+      }
+    }
+  });
+
+  return Object.assign(events, {
+    stdin,
+    stdout,
+    stderr,
+    kill() {
+      if (killed) return true;
+      killed = true;
+      stdin.end();
+      stdout.end();
+      stderr.end();
+      queueMicrotask(() => events.emit('exit', 0, null));
+      return true;
+    },
+  }) as unknown as ChildProcess;
+}
+
+for (const turnCarriesError of [true, false]) {
+  test(`a rejected model surfaces as a visible error, not an empty turn (turn.error ${turnCarriesError ? 'set' : 'absent'})`, async () => {
+    const captured: Captured[] = [];
+    const context = { ...createContext(null), resolveResumeModel: async () => 'gpt-5.4' };
+
+    await queryCodexViaAppServer(
+      'hey',
+      { sessionId: 'app-session-rejected', cwd: '/tmp', permissionMode: 'bypassPermissions', model: 'gpt-5.4' },
+      createWriter(captured),
+      context,
+      (event) => event,
+      () => spawnModelRejectingAppServer({ turnCarriesError }),
+    );
+
+    const errors = captured.filter((message) => message.kind === 'error');
+    assert.equal(errors.length, 1, `exactly one error row; captured=${JSON.stringify(captured)}`);
+    assert.equal(
+      errors[0]?.content,
+      "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.",
+      'the nested API message is unwrapped for display',
+    );
+    assert.equal(errors[0]?.errorCode, 'model_not_found');
+    assert.equal(errors[0]?.model, 'gpt-5.4', 'the rejected model is named so the client can drop it');
+    assert.equal(errors[0]?.sessionId, 'app-session-rejected');
+
+    const complete = captured.filter((message) => message.kind === 'complete');
+    assert.equal(complete.length, 1, 'exactly one terminal complete');
+    assert.equal(complete[0]?.exitCode, 1, 'the run is reported as failed');
+  });
+}

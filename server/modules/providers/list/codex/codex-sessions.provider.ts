@@ -9,6 +9,7 @@ import {
   createNormalizedMessage,
   extractCodexTokenBudget,
   generateMessageId,
+  parseCodexTurnError,
   readObjectRecord,
   sliceTailPage,
 } from '@/shared/utils.js';
@@ -874,13 +875,17 @@ export class CodexSessionsProvider implements IProviderSessions {
       })];
     }
     if (raw.type === 'turn_failed') {
+      // Codex wraps the upstream API body as a JSON string; show its inner
+      // message and tag the code so the client can react to `model_not_found`.
+      const failure = parseCodexTurnError(raw.error, 'Turn failed');
       return [createNormalizedMessage({
         id: baseId,
         sessionId,
         timestamp: ts,
         provider: PROVIDER,
         kind: 'error',
-        content: raw.error?.message || 'Turn failed',
+        content: failure.message,
+        ...(failure.code ? { errorCode: failure.code } : {}),
       })];
     }
 

@@ -15,6 +15,7 @@ import {
   FALLBACK_PROVIDER_EFFORT_VALUES,
   toProviderEffortOptions,
 } from '../constants/providerEffort';
+import { decideRejectedModelReset } from '../utils/rejectedModel';
 
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
   claude: 'default',
@@ -293,7 +294,11 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     if (stored && def.OPTIONS.some((o) => o.value === stored)) {
       return stored;
     }
-    if (current && def.OPTIONS.some((o) => o.value === current)) {
+    // Every explicit pick is written to localStorage, so with nothing stored
+    // `current` is only the first-paint placeholder (FALLBACK_DEFAULT_MODEL).
+    // The backend default wins then — for Codex it is the model configured in
+    // ~/.codex/config.toml, the one known to work for the signed-in account.
+    if (stored && current && def.OPTIONS.some((o) => o.value === current)) {
       return current;
     }
     return def.DEFAULT;
@@ -555,18 +560,11 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
    * inherits it, and — when a session is open — is also recorded against that
    * session so reopening it later restores this model.
    */
-  const selectProviderModel = useCallback(async (
+  const recordSessionModel = useCallback(async (
     targetProvider: LLMProvider,
+    normalizedSessionId: string,
     model: string,
-    sessionId?: string | null,
   ) => {
-    setStoredProviderModel(targetProvider, model);
-
-    const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
-    if (!normalizedSessionId) {
-      return { scope: 'default' as const, model };
-    }
-
     const response = await authenticatedFetch(
       `/api/providers/${targetProvider}/sessions/${encodeURIComponent(normalizedSessionId)}/active-model`,
       {
@@ -582,8 +580,65 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
     const storedModel = body.data?.model?.trim() || model;
     setSessionModel(storedModel);
+    return storedModel;
+  }, []);
+
+  const selectProviderModel = useCallback(async (
+    targetProvider: LLMProvider,
+    model: string,
+    sessionId?: string | null,
+  ) => {
+    setStoredProviderModel(targetProvider, model);
+
+    const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!normalizedSessionId) {
+      return { scope: 'default' as const, model };
+    }
+
+    const storedModel = await recordSessionModel(targetProvider, normalizedSessionId, model);
     return { scope: 'session' as const, model: storedModel };
-  }, [setStoredProviderModel]);
+  }, [recordSessionModel, setStoredProviderModel]);
+
+  /**
+   * The provider rejected `rejectedModel` (e.g. a Codex model the account
+   * cannot use). Moves whichever choices hold it — the per-provider default
+   * and/or the open session's recorded model — to the catalog default, so the
+   * next send does not hit the same error. The error row is rendered by the
+   * normal message path; this only stops the composer resending the model.
+   */
+  const handleProviderModelRejected = useCallback((
+    targetProvider: LLMProvider,
+    rejectedModel: string,
+    sessionId: string | null,
+  ) => {
+    const openSessionId = selectedSession?.id ?? null;
+    const reset = decideRejectedModelReset({
+      rejectedModel,
+      catalogDefault: providerModelCatalog[targetProvider]?.DEFAULT,
+      storedModel: providerModels[targetProvider],
+      // Only the session on screen has a loaded `sessionModel` to compare.
+      sessionModel: sessionId && sessionId === openSessionId ? sessionModel : null,
+    });
+    if (!reset) {
+      return;
+    }
+
+    if (reset.resetStored) {
+      setStoredProviderModel(targetProvider, reset.replacement);
+    }
+    if (reset.resetSession && openSessionId) {
+      void recordSessionModel(targetProvider, openSessionId, reset.replacement).catch((error) => {
+        console.error('Error resetting the rejected session model:', error);
+      });
+    }
+  }, [
+    providerModelCatalog,
+    providerModels,
+    recordSessionModel,
+    selectedSession?.id,
+    sessionModel,
+    setStoredProviderModel,
+  ]);
 
   // The open session's model wins over the per-provider default, so switching
   // sessions shows (and sends) what each session actually runs with.
@@ -631,6 +686,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     providerModelsRefreshing,
     hardRefreshProviderModels: () => loadProviderModels({ bypassCache: true }),
     selectProviderModel,
+    handleProviderModelRejected,
     setStoredProviderEffort,
     resolvePermissionModeForProvider,
   };

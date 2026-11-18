@@ -174,14 +174,23 @@ const mapCodexModel = (model: CodexCachedModel): ProviderModelOption => {
 /**
  * Provider tests use this builder to verify Codex cache parsing and fallback
  * merging without reading a real `~/.codex/models_cache.json` file.
+ *
+ * `configuredModel` is the `model` from `~/.codex/config.toml`. It becomes the
+ * DEFAULT — that is the model the user's own Codex CLI runs, so it is the one
+ * known to work for their account — and is added as an option when the cache
+ * does not list it (the catalog can lag the config, or fail to parse at all).
  */
-export const buildCodexModelsDefinition = (models: CodexCachedModel[]): ProviderModelsDefinition => {
+export const buildCodexModelsDefinition = (
+  models: CodexCachedModel[],
+  configuredModel?: string | null,
+): ProviderModelsDefinition => {
   const sortedModels = [...models]
     .filter((model) => model.visibility === 'list' && model.supported_in_api !== false)
     .sort((left, right) => readCodexPriority(left.priority) - readCodexPriority(right.priority));
 
   const options: ProviderModelOption[] = [];
   const seenValues = new Set<string>();
+  const normalizedConfiguredModel = configuredModel?.trim() || null;
 
   for (const model of sortedModels) {
     const mappedModel = mapCodexModel(model);
@@ -202,6 +211,21 @@ export const buildCodexModelsDefinition = (models: CodexCachedModel[]): Provider
     options.push(fallbackModel);
   }
 
+  if (normalizedConfiguredModel) {
+    if (!seenValues.has(normalizedConfiguredModel)) {
+      options.unshift({
+        value: normalizedConfiguredModel,
+        label: normalizedConfiguredModel,
+        description: 'Configured in ~/.codex/config.toml.',
+      });
+    }
+
+    return {
+      OPTIONS: options,
+      DEFAULT: normalizedConfiguredModel,
+    };
+  }
+
   if (options.length === 0) {
     return CODEX_FALLBACK_MODELS;
   }
@@ -216,35 +240,43 @@ export const buildCodexModelsDefinition = (models: CodexCachedModel[]): Provider
   };
 };
 
+/** Reads `model` from `~/.codex/config.toml`; null when unset or unreadable. */
+const readConfiguredCodexModel = async (): Promise<string | null> => {
+  try {
+    const raw = await readFile(CODEX_CONFIG_PATH, 'utf8');
+    const parsed = readObjectRecord(TOML.parse(raw));
+    return readOptionalString(parsed?.model) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const readCachedCodexModels = async (): Promise<CodexCachedModel[]> => {
+  try {
+    const raw = await readFile(CODEX_MODELS_CACHE_PATH, 'utf8');
+    const parsed = readObjectRecord(JSON.parse(raw));
+    return Array.isArray(parsed?.models)
+      ? parsed.models.filter(isCodexCachedModel)
+      : [];
+  } catch {
+    return [];
+  }
+};
+
 export class CodexProviderModels implements IProviderModels {
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
-    try {
-      const raw = await readFile(CODEX_MODELS_CACHE_PATH, 'utf8');
-      const parsed = readObjectRecord(JSON.parse(raw));
-      const models = Array.isArray(parsed?.models)
-        ? parsed.models.filter(isCodexCachedModel)
-        : [];
-
-      return buildCodexModelsDefinition(models);
-    } catch {
-      return CODEX_FALLBACK_MODELS;
-    }
+    // An empty cache still merges the fallbacks, so this never comes back empty.
+    return buildCodexModelsDefinition(await readCachedCodexModels(), await readConfiguredCodexModel());
   }
 
   async getCurrentActiveModel(): Promise<ProviderCurrentActiveModel> {
-    try {
-      const raw = await readFile(CODEX_CONFIG_PATH, 'utf8');
-      const parsed = readObjectRecord(TOML.parse(raw));
-      const model = readOptionalString(parsed?.model);
-      if (!model) {
-        return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
-      }
-
-      return {
-        model,
-      };
-    } catch {
+    const model = await readConfiguredCodexModel();
+    if (!model) {
       return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
     }
+
+    return {
+      model,
+    };
   }
 }

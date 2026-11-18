@@ -606,6 +606,65 @@ export function extractCodexTokenBudget(value: unknown): CodexTokenBudget | null
 }
 
 // ---------------------------
+//----------------- CODEX TURN ERROR UTILITIES ------------
+/** User-facing text and upstream API code (e.g. `model_not_found`) of a failed Codex turn. */
+type CodexTurnErrorDetails = {
+  message: string;
+  code: string | null;
+};
+
+/**
+ * Reduces a Codex turn error to the text a user should read plus its API code.
+ *
+ * Both Codex transports report a failed turn with `error.message` holding the
+ * upstream API body *as a JSON string*, e.g.
+ * `{"type":"error","status":400,"error":{"message":"The 'gpt-5.4' model is not
+ * supported ...","code":"model_not_found"}}`. Shown verbatim that is unreadable,
+ * so this unwraps the inner `error.message` / `error.code` when the string
+ * parses, and otherwise returns the text unchanged with a null code.
+ *
+ * Accepts the raw error value from either transport: a string, an
+ * `{ message }` record (exec `turn.failed`, app-server `turn.error`), or an
+ * `Error`. Never throws; an empty input yields `fallbackMessage`.
+ *
+ * Consumed by the Codex runtime transports and the Codex message normalizer
+ * (`modules/providers/list/codex/*`) so every path renders the same text and
+ * tags `model_not_found` the same way for the client's model-reset logic.
+ */
+export function parseCodexTurnError(
+  value: unknown,
+  fallbackMessage = 'Codex turn failed',
+): CodexTurnErrorDetails {
+  const rawMessage = typeof value === 'string'
+    ? value
+    : value instanceof Error
+      ? value.message
+      : readOptionalString(readObjectRecord(value)?.message) ?? '';
+  const trimmed = rawMessage.trim();
+  if (!trimmed) {
+    return { message: fallbackMessage, code: null };
+  }
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const body = readObjectRecord(JSON.parse(trimmed));
+      const inner = readObjectRecord(body?.error);
+      const innerMessage = readOptionalString(inner?.message) ?? readOptionalString(body?.message);
+      if (innerMessage) {
+        return {
+          message: innerMessage,
+          code: readOptionalString(inner?.code) ?? readOptionalString(body?.code) ?? null,
+        };
+      }
+    } catch {
+      // Not JSON after all; fall through and show the text as-is.
+    }
+  }
+
+  return { message: trimmed, code: null };
+}
+
+// ---------------------------
 //----------------- MCP CONFIG PARSING UTILITIES ------------
 /**
  * Safely narrows an unknown value to a plain object record.

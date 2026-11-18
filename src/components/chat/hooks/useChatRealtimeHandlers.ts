@@ -45,6 +45,13 @@ interface UseChatRealtimeHandlersArgs {
    * client has to subscribe before it will receive the stream.
    */
   onUnrequestedRunStarted?: (sessionId: string) => void;
+  /**
+   * The provider rejected the model a turn ran with (`errorCode:
+   * 'model_not_found'`, e.g. a model the Codex account cannot use). The error
+   * row itself is rendered like any other; this lets the composer stop
+   * resending that model.
+   */
+  onProviderModelRejected?: (provider: LLMProvider, model: string, sessionId: string | null) => void;
   sessionStore: SessionStore;
 }
 
@@ -85,6 +92,7 @@ export function useChatRealtimeHandlers({
   onSessionIdle,
   onWebSocketReconnect,
   onUnrequestedRunStarted,
+  onProviderModelRejected,
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
@@ -319,6 +327,13 @@ export function useChatRealtimeHandlers({
         // 'error' is an informational message row, not a terminal event —
         // providers emit it for mid-run stderr output too. Run teardown is
         // always signalled by the unified 'complete' that follows.
+        case 'error': {
+          if (msg.errorCode === 'model_not_found' && typeof msg.model === 'string' && msg.model) {
+            const rejectedProvider = (typeof msg.provider === 'string' ? msg.provider : provider) as LLMProvider;
+            onProviderModelRejected?.(rejectedProvider, msg.model, sid || null);
+          }
+          break;
+        }
 
         case 'permission_request': {
           if (!msg.requestId) break;
@@ -402,6 +417,7 @@ export function useChatRealtimeHandlers({
     onSessionIdle,
     onWebSocketReconnect,
     onUnrequestedRunStarted,
+    onProviderModelRejected,
     sessionStore,
   ]);
 }

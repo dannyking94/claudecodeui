@@ -38,7 +38,12 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled,
 } from '@/modules/notifications/index.js';
-import { createCompleteMessage, createNormalizedMessage, extractCodexTokenBudget } from '@/shared/utils.js';
+import {
+  createCompleteMessage,
+  createNormalizedMessage,
+  extractCodexTokenBudget,
+  parseCodexTurnError,
+} from '@/shared/utils.js';
 import type {
   AnyRecord,
   ProviderPermissionDecision,
@@ -167,6 +172,17 @@ function toCodexDecision(method: string, decision: ProviderPermissionDecision): 
   return { decision: decision.allow ? 'accept' : 'decline' };
 }
 
+/**
+ * A turn the app-server reported as failed, carrying the upstream API code
+ * (e.g. `model_not_found`) so the run's error message can be tagged with it.
+ */
+class CodexTurnFailure extends Error {
+  constructor(message: string, readonly code: string | null) {
+    super(message);
+    this.name = 'CodexTurnFailure';
+  }
+}
+
 type CodexAppServerOptions = {
   sessionId: string;
   sessionSummary?: string;
@@ -220,6 +236,13 @@ class CodexAppServerConnection {
   private latestTokenUsage: AnyRecord | null = null;
   private latestRateLimits: AnyRecord | null = null;
   private turnCompletionStarted = false;
+  /**
+   * Last non-retried `error` notification. app-server sends it just before a
+   * `turn/completed` whose `turn.status` is `failed`; kept as the fallback
+   * reason when that turn carries no `error` of its own.
+   */
+  private lastTurnError: unknown = null;
+  private sawAgentMessage = false;
   private turnSettled = false;
   private aborted = false;
 
@@ -483,7 +506,16 @@ class CodexAppServerConnection {
         return;
       }
       case 'item/completed': {
+        // app-server names items in camelCase; the exec-shaped fixtures use snake_case.
+        const itemType = (params.item as AnyRecord | undefined)?.type;
+        if (itemType === 'agentMessage' || itemType === 'agent_message') this.sawAgentMessage = true;
         this.emitProviderEvent({ type: 'item.completed', item: params.item });
+        return;
+      }
+      case 'error': {
+        // `willRetry: true` is a transient failure Codex is already retrying;
+        // only a final one decides the turn.
+        if (params.willRetry !== true) this.lastTurnError = params.error ?? null;
         return;
       }
       case 'thread/tokenUsage/updated': {
@@ -498,11 +530,20 @@ class CodexAppServerConnection {
         return;
       }
       case 'turn/completed': {
+        // A rejected request (e.g. a model the account cannot use) still ends
+        // with `turn/completed`, just with `turn.status: "failed"`. Treating it
+        // as success is what left the chat silently empty.
+        const turn = (params.turn as AnyRecord | undefined) ?? {};
+        const failedSilently = this.lastTurnError !== null && !this.sawAgentMessage;
+        if (turn.status === 'failed' || failedSilently) {
+          this.failTurn(turn.error ?? this.lastTurnError);
+          return;
+        }
         this.finishTurn(params);
         return;
       }
       case 'turn/failed': {
-        this.settleTurn?.(new Error(String((params.error as AnyRecord)?.message ?? 'Codex turn failed')));
+        this.failTurn(params.error ?? this.lastTurnError);
         return;
       }
       default:
@@ -536,6 +577,12 @@ class CodexAppServerConnection {
       sessionId: this.options.sessionId || this.threadId,
       provider: 'codex',
     }));
+  }
+
+  /** Settles the turn as failed with Codex's own reason, unwrapped for display. */
+  private failTurn(rawError: unknown): void {
+    const failure = parseCodexTurnError(rawError);
+    this.settleTurn?.(new CodexTurnFailure(failure.message, failure.code));
   }
 
   /** Flushes the final token snapshot before the transport reports completion. */
@@ -605,11 +652,15 @@ export async function queryCodexViaAppServer(
   } catch (error) {
     failure = error instanceof Error ? error : new Error(String(error));
     console.error('[CodexAppServer] turn failed:', failure.message);
+    const errorCode = failure instanceof CodexTurnFailure ? failure.code : null;
     writer.send(createNormalizedMessage({
       kind: 'error',
       content: failure.message,
       sessionId,
       provider: 'codex',
+      // `errorCode` + `model` let the client drop a stored model choice the
+      // account rejected (`model_not_found`) instead of resending it forever.
+      ...(errorCode ? { errorCode, model } : {}),
     }));
   } finally {
     connection.dispose();
