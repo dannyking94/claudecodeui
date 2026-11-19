@@ -8,6 +8,11 @@ import { useEffect, useRef } from 'react';
  * a custom property on <html>: resize fires on every frame of the keyboard
  * animation, and changing a variable on the root re-resolves style for the
  * whole document each time (~40 ms per event on a long chat, against ~0.1 ms).
+ *
+ * While lifted it also carries `data-keyboard-open`, which zeroes the
+ * home-indicator padding under the composer (`--keyboard-aware-safe-bottom`):
+ * the keyboard covers that band, so the inset would only open a gap. The
+ * attribute changes only when the keyboard opens or closes, not per frame.
  */
 export function useVisualViewportKeyboardOffset<T extends HTMLElement>() {
   const containerRef = useRef<T>(null);
@@ -28,6 +33,7 @@ export function useVisualViewportKeyboardOffset<T extends HTMLElement>() {
       }
       lastBottom = bottom;
       containerRef.current.style.bottom = bottom;
+      containerRef.current.toggleAttribute('data-keyboard-open', bottom !== '0px');
     };
 
     visualViewport.addEventListener('resize', updateKeyboardHeight);

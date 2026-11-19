@@ -1,7 +1,6 @@
-import { memo, useCallback, useEffect } from 'react';
+import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { useDeviceSettings } from '@/shared/hooks/useDeviceSettings';
 import { useVersionCheck } from '@/shared/hooks/useVersionCheck';
 import { useUiPreferences, useSetUiPreference } from '@/shared/context/UiPreferencesContext';
 import { useSidebarController } from '@/modules/sidebar/hooks/useSidebarController';
@@ -63,7 +62,6 @@ function Sidebar({
   isMobile,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
-  const { isPWA } = useDeviceSettings({ trackMobile: false });
   const { updateAvailable, restartRequired, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
     'siteboon',
     'claudecodeui',
@@ -168,15 +166,6 @@ function Sidebar({
     keepProjectsExpanded: preferences.keepProjectsExpanded,
   });
 
-  useEffect(() => {
-    if (typeof document === 'undefined') {
-      return;
-    }
-
-    document.documentElement.classList.toggle('pwa-mode', isPWA);
-    document.body.classList.toggle('pwa-mode', isPWA);
-  }, [isPWA]);
-
   const handleProjectCreated = () => {
     void paletteOps.refreshProjects();
   };
@@ -275,7 +264,6 @@ function Sidebar({
       ) : (
         <>
         <SidebarContent
-            isPWA={isPWA}
             isMobile={isMobile}
             isLoading={isLoading}
             projects={projects}

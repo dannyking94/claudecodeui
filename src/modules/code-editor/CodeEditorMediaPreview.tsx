@@ -275,8 +275,8 @@ export default function CodeEditorMediaPreview({
     : 'fixed inset-0 z-[9999] md:bg-black/50 md:flex md:items-center md:justify-center md:p-4';
 
   const innerClassName = isFullscreen
-    ? 'bg-background flex flex-col w-full h-full'
-    : 'bg-background shadow-2xl flex flex-col w-full h-full md:rounded-lg md:shadow-2xl md:w-full md:max-w-6xl md:h-[80vh] md:max-h-[80vh]';
+    ? 'bg-background flex flex-col w-full h-full safe-area-pad'
+    : 'bg-background shadow-2xl flex flex-col w-full h-full max-md:safe-area-pad md:rounded-lg md:shadow-2xl md:w-full md:max-w-6xl md:h-[80vh] md:max-h-[80vh]';
 
   return (
     <div className={containerClassName}>

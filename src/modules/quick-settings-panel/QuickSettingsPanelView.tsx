@@ -184,7 +184,7 @@ function QuickSettingsPanelView({ selectedProject, onInsertCommand }: QuickSetti
         )
       ) : (
         <div
-          className={`fixed right-0 top-0 z-[9999] h-full w-64 transform border-l border-border bg-background shadow-xl transition-transform duration-150 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'h-screen' : ''}`}
+          className={`fixed right-0 top-0 z-[9999] h-full w-64 transform border-l border-border bg-background shadow-xl transition-transform duration-150 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'safe-area-pad' : ''}`}
         >
           {panelBody}
         </div>

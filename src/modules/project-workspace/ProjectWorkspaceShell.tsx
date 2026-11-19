@@ -18,7 +18,14 @@ function ProjectWorkspaceShell({
   const shellRef = useVisualViewportKeyboardOffset<HTMLDivElement>();
 
   return (
-    <div ref={shellRef} className="fixed inset-0 flex bg-background">
+    // Edge to edge on purpose: the background fills the rounded corners, the
+    // Dynamic Island band and the home-indicator band; the header, composer
+    // and sidebar pad their own content by the safe-area insets. The side
+    // insets only matter in landscape.
+    <div
+      ref={shellRef}
+      className="fixed inset-0 flex bg-background pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]"
+    >
       <ProjectEffects navigate={navigate} />
       <ProjectSidebarRegion isMobile={isMobile} />
 

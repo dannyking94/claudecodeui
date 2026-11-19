@@ -12,8 +12,6 @@ const MOD_KEY =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
 type SidebarHeaderProps = {
-  isPWA: boolean;
-  isMobile: boolean;
   isLoading: boolean;
   projectsCount: number;
   runningSessionsCount: number;
@@ -52,8 +50,6 @@ function LogoBlock({ t }: { t: TFunction }) {
 
 /** Rendered by SidebarContent at the top of the panel for the search box, search-mode tabs, refresh and new-project actions. */
 export default function SidebarHeader({
-  isPWA,
-  isMobile,
   isLoading,
   projectsCount,
   runningSessionsCount,
@@ -184,8 +180,9 @@ export default function SidebarHeader({
 
       {/* Mobile header */}
       <div
-        className="p-3 pb-2 md:hidden"
-        style={isPWA && isMobile ? { paddingTop: '16px' } : {}}
+        // The mobile drawer runs to the top of the screen; keep its header out
+        // from under the status bar and Dynamic Island.
+        className="p-3 pb-2 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] md:hidden"
       >
         <div className="flex items-center justify-between">
           {IS_PLATFORM ? (

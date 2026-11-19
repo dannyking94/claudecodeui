@@ -82,7 +82,6 @@ function groupArchivedSessionsByProject(sessions: ArchivedSessionListItem[]): Ar
 }
 
 type SidebarContentProps = {
-  isPWA: boolean;
   isMobile: boolean;
   isLoading: boolean;
   projects: Project[];
@@ -131,7 +130,6 @@ type SidebarContentProps = {
 
 /** Rendered by Sidebar as the expanded panel body: header, project list, conversation/archive search results, recent conversations and footer. */
 export default function SidebarContent({
-  isPWA,
   isMobile,
   isLoading,
   projects,
@@ -190,8 +188,6 @@ export default function SidebarContent({
       style={{}}
     >
       <SidebarHeader
-        isPWA={isPWA}
-        isMobile={isMobile}
         isLoading={isLoading}
         projectsCount={projects.length}
         runningSessionsCount={runningSessionsCount}

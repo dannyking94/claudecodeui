@@ -18,7 +18,7 @@ export default function WorkspaceStateView({ mode, isMobile, onMenuClick }: Work
   return (
     <div className="flex h-full flex-col">
       {isMobile && (
-        <div className="pwa-header-safe flex-shrink-0 border-b border-border/50 bg-background/80 p-2 backdrop-blur-sm sm:p-3">
+        <div className="flex-shrink-0 border-b border-border/50 bg-background/80 p-2 pt-[calc(env(safe-area-inset-top,0px)+0.5rem)] backdrop-blur-sm sm:p-3 sm:pt-[calc(env(safe-area-inset-top,0px)+0.75rem)]">
           <MobileMenuButton onMenuClick={onMenuClick} compact />
         </div>
       )}

@@ -313,7 +313,9 @@ export default function ChatComposer({
     isLoading && !hasAnyInput && !isRecording && !isTranscribing ? t('input.stop') : t('input.send');
 
   return (
-    <div className="chat-composer-shell relative flex-shrink-0 px-2 pb-2 pt-0 sm:px-4 sm:pb-4 md:px-4 md:pb-6">
+    // The shell runs to the bottom edge of the screen; the bottom padding keeps
+    // the composer's buttons above the home indicator (0px while the keyboard is up).
+    <div className="chat-composer-shell relative flex-shrink-0 px-2 pb-[max(0.5rem,var(--keyboard-aware-safe-bottom))] pt-0 sm:px-4 sm:pb-[max(1rem,var(--keyboard-aware-safe-bottom))] md:px-4 md:pb-[max(1.5rem,var(--keyboard-aware-safe-bottom))]">
       {!hasPendingPermissions && (
         <div className="pointer-events-none absolute bottom-full left-1/2 z-10 w-[calc(100%-1rem)] max-w-[54.25rem] -translate-x-1/2 translate-y-px bg-transparent sm:w-[calc(100%-2rem)]">
           <ActivityIndicator activity={activity} onAbort={onAbortSession} isInputFocused={isInputFocused} />

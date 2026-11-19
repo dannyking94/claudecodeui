@@ -67,11 +67,6 @@
     --mobile-nav-height: 52px;
     --mobile-nav-padding: 20px;
     --mobile-nav-total: calc(var(--mobile-nav-height) + var(--mobile-nav-padding) + env(safe-area-inset-bottom, 0px));
-
-    /* Header safe area dimensions */
-    --header-safe-area-top: env(safe-area-inset-top, 0px);
-    --header-base-padding: 8px;
-    --header-total-padding: calc(var(--header-safe-area-top) + var(--header-base-padding));
   }
   
   /* Fallback for older iOS versions */
@@ -148,41 +143,30 @@
     overscroll-behavior-y: contain;
   }
   
-  /* Root element with safe area padding for PWA */
+  /* The app shell is a fixed inset-0 container, so #root only needs to fill
+     the document. It deliberately carries no safe-area padding: every surface
+     paints its background edge to edge, under the rounded corners, the
+     Dynamic Island and the home indicator, and pads only its own content by
+     the insets (WorkspaceHeader, ChatComposer, the sidebar, full-screen
+     mobile panels via max-md:safe-area-pad). */
   #root {
-    min-height: 100vh;
+    min-height: 100%;
     margin: 0;
     padding: 0;
     box-sizing: border-box;
   }
-  
-  /* Apply safe area padding in standalone mode */
-  @supports (padding-top: env(safe-area-inset-top)) {
-    @media (display-mode: standalone) {
-      #root {
-        padding-top: var(--safe-area-inset-top);
-        padding-left: var(--safe-area-inset-left);
-        padding-right: var(--safe-area-inset-right);
-      }
-    }
+
+  /* 0px while the iOS keyboard is up: the shell is already lifted above the
+     keyboard (useVisualViewportKeyboardOffset), so the home-indicator inset
+     would only leave a gap between the composer and the keys. */
+  :root {
+    --keyboard-aware-safe-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  /* PWA mode detected by JavaScript - more reliable */
-  body.pwa-mode #root {
-    padding-left: var(--safe-area-inset-left);
-    padding-right: var(--safe-area-inset-right);
-    height: 100vh;
-    overflow: hidden;
+  [data-keyboard-open] {
+    --keyboard-aware-safe-bottom: 0px;
   }
 
-  /* Adjust fixed inset positioning in PWA mode */
-  body.pwa-mode .fixed.inset-0 {
-    top: var(--header-total-padding);
-    left: var(--safe-area-inset-left);
-    right: var(--safe-area-inset-right);
-    bottom: 0;
-  }
-  
   /* Global transition defaults */
   button, 
   a, 
@@ -239,6 +223,14 @@
 }
 
 @layer utilities {
+  /* For surfaces that fill the screen on a phone (Settings, the code editor,
+     full-height modals): the background runs under the rounded corners, the
+     Dynamic Island and the home indicator while the content stays inside. */
+  .safe-area-pad {
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+      env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+
   /* Smooth hover transitions for interactive elements */
   button:hover,
   a:hover,
@@ -767,24 +759,6 @@
   /* Safe area support for iOS devices */
   .ios-bottom-safe {
     padding-bottom: env(safe-area-inset-bottom);
-  }
-  
-  /* PWA specific header adjustments - uses CSS variables for consistency */
-  .pwa-header-safe {
-    padding-top: var(--header-base-padding);
-  }
-
-  /* When PWA mode is detected by JavaScript */
-  body.pwa-mode .pwa-header-safe {
-    /* Reset padding since #root already handles safe area */
-    padding-top: 0px !important;
-  }
-
-  /* For mobile PWA, add bottom padding for better spacing */
-  @media screen and (max-width: 768px) {
-    body.pwa-mode .pwa-header-safe {
-      padding-bottom: 8px;
-    }
   }
   
   @media screen and (max-width: 768px) {

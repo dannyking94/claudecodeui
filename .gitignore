@@ -154,3 +154,6 @@ server/**/tests/file-tree-outside-*/
 
 # Merge decision screenshots for the owner (never committed)
 .merge-decisions/
+
+# Device screenshots from layout checks (never committed)
+.shots/

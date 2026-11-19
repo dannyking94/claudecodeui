@@ -150,7 +150,7 @@ export default function TaskDetailModal({
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 md:p-4">
       <div
         className={cn(
-          'w-full md:max-w-4xl h-full md:h-[90vh] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 md:rounded-lg shadow-xl flex flex-col',
+          'w-full md:max-w-4xl h-full max-md:safe-area-pad md:h-[90vh] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 md:rounded-lg shadow-xl flex flex-col',
           className,
         )}
       >

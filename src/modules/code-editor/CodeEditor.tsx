@@ -291,7 +291,7 @@ export default function CodeEditor({
 
   const innerContainerClassName = isSidebar
     ? 'bg-background flex flex-col w-full h-full'
-    : `bg-background shadow-2xl flex flex-col w-full h-full md:rounded-lg md:shadow-2xl${
+    : `bg-background shadow-2xl flex flex-col w-full h-full max-md:safe-area-pad md:rounded-lg md:shadow-2xl${
       isFullscreen ? ' md:w-full md:h-full md:rounded-none' : ' md:w-full md:max-w-6xl md:h-[80vh] md:max-h-[80vh]'
     }`;
 
