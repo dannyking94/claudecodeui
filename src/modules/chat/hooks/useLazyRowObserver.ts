@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { RefObject } from 'react';
 
+import { isDocumentScroller } from '@/shared/documentScroll';
+
 /** How far beyond the viewport a transcript row keeps (or gains) its mounted content. */
 const LAZY_ROW_VIEWPORT_MARGIN_PX = 1200;
 
@@ -47,7 +49,10 @@ export function useLazyRowObserver(
           callbacksRef.current.get(entry.target)?.(entry.isIntersecting);
         }
       }, {
-        root: scrollContainerRef.current,
+        // The document scroller is observed as the viewport itself (root: null).
+        root: scrollContainerRef.current && isDocumentScroller(scrollContainerRef.current)
+          ? null
+          : scrollContainerRef.current,
         rootMargin: `${LAZY_ROW_VIEWPORT_MARGIN_PX}px 0px`,
       });
     }
