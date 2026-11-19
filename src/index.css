@@ -200,10 +200,10 @@
     );
   }
 
-  /* EXPERIMENTAL document-scroll mode (src/shared/documentScroll.ts, opt-in with
-     ?docScroll=1, iPhone/iPad browser tab only). iOS Safari collapses its
-     toolbar only when the document scrolls, never for an inner scroll box. So
-     while the Chat tab is showing, the page stops being a fixed-height shell:
+  /* Document-scroll mode (src/shared/documentScroll.ts): the default in an
+     iPhone/iPad browser tab, switched off per browser with ?docScroll=0.
+     iOS Safari collapses its toolbar only when the document scrolls, never for
+     an inner scroll box. So while the Chat tab is showing, the page stops being a fixed-height shell:
      every box from the shell down to the transcript grows with its content, the
      transcript stops scrolling by itself, and the header and composer stick to
      the top and bottom of the viewport. `.doc-scroll-active` is on <html> only
@@ -295,6 +295,19 @@
 
   html.doc-scroll-active .workspace-drawer[aria-hidden='true'] > .workspace-drawer-dim {
     display: none;
+  }
+
+  /* While the drawer is open the page behind it must not scroll: a drag on the
+     dim, or one that runs past the end of the sidebar's own list, would
+     otherwise move the transcript. The offset is kept, so closing the drawer
+     returns to the same line. */
+  html.doc-scroll-active:has(.workspace-drawer[aria-hidden='false']),
+  html.doc-scroll-active:has(.workspace-drawer[aria-hidden='false']) body {
+    overflow: hidden;
+  }
+
+  html.doc-scroll-active .workspace-drawer[aria-hidden='false'] > button {
+    touch-action: none;
   }
 
   /* Global transition defaults */

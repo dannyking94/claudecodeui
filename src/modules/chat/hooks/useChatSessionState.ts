@@ -244,10 +244,10 @@ export function useChatSessionState({
   const [loadAllJustFinished, setLoadAllJustFinished] = useState(false);
   const [showLoadAllOverlay, setShowLoadAllOverlay] = useState(false);
 
-  // Normally the transcript pane, attached by ChatMessagesPane. In the
-  // experimental document-scroll mode the page itself scrolls, so the ref is
-  // pinned to <html> for the life of the hook and the pane leaves it alone
-  // (src/shared/documentScroll.ts).
+  // Normally the transcript pane, attached by ChatMessagesPane. In
+  // document-scroll mode (iPhone/iPad browser tab) the page itself scrolls, so
+  // the ref is pinned to <html> for the life of the hook and the pane leaves it
+  // alone (src/shared/documentScroll.ts).
   const scrollContainerRef = useRef<HTMLDivElement>(
     DOCUMENT_SCROLL_ENABLED ? (document.documentElement as HTMLDivElement) : null,
   );

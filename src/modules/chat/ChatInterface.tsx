@@ -79,7 +79,7 @@ function ChatInterface({
   const { subscribe, isConnected } = useWebSocket();
   const { t } = useTranslation('chat');
 
-  // Experimental document-scroll mode: the page layout follows the Chat tab's
+  // Document-scroll mode (iPhone/iPad browser tab): the page layout follows the Chat tab's
   // visibility. Declared before useChatSessionState on purpose, so the page is
   // already scrollable when that hook's layout effect restores the position.
   useLayoutEffect(() => {
