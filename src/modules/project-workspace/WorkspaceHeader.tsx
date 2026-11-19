@@ -104,8 +104,12 @@ export default function WorkspaceHeader({
 
   return (
     <header className="flex-shrink-0 border-b border-border/60 bg-background/95 px-3 py-1.5 pt-[calc(env(safe-area-inset-top,0px)+0.375rem)] backdrop-blur-sm sm:px-4 sm:py-2 sm:pt-[calc(env(safe-area-inset-top,0px)+0.5rem)]">
-      <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
-        <div className="flex min-w-0 items-center gap-2 sm:max-w-[min(34%,24rem)] sm:flex-[1_1_18rem]">
+      {/* One row at every width. On a phone the title keeps a minimum width and
+          takes whatever the icon-only tab bar leaves; a tab bar too wide for
+          the rest scrolls sideways inside its own box. A second row for the
+          tabs cost the transcript ~45px of a screen that has none to spare. */}
+      <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-2 max-sm:min-w-[7rem] max-sm:flex-1 sm:max-w-[min(34%,24rem)] sm:flex-[1_1_18rem]">
           {isMobile && <MobileMenuButton onMenuClick={onMenuClick} />}
           <WorkspaceTitle
             activeTab={activeTab}
@@ -118,7 +122,7 @@ export default function WorkspaceHeader({
         </div>
 
         <div className="flex min-w-0 items-center gap-1 sm:flex-1">
-        <div className="-ml-3 min-w-0 flex-1 sm:mx-0">
+        <div className="min-w-0 flex-1">
           <div className="relative ml-auto w-fit max-w-full">
             {canScrollLeft && (
               <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background via-background/90 to-transparent" />
@@ -127,7 +131,7 @@ export default function WorkspaceHeader({
               ref={scrollRef}
               onScroll={updateScrollState}
               className={cn(
-                'scrollbar-hide max-w-full scroll-smooth overflow-x-auto overscroll-x-contain px-3 [-webkit-overflow-scrolling:touch]',
+                'scrollbar-hide max-w-full scroll-smooth overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]',
                 hasOverflow ? 'sm:px-9' : 'sm:pl-3 sm:pr-0',
               )}
             >

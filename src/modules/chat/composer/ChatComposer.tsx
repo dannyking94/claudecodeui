@@ -492,11 +492,20 @@ export default function ChatComposer({
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
               placeholder={placeholder}
+              // One line on a phone, growing with the text (onTextareaInput);
+              // from `sm` up the two-line resting height is kept.
+              rows={1}
+              className="sm:min-h-16"
             />
         </PromptInputBody>
 
-        <PromptInputFooter className="flex-wrap gap-y-1">
-          <PromptInputTools className="min-w-0">
+        {/* On a phone the footer is one row, never two: the tools shrink to
+            what is left of the send cluster and scroll sideways if a provider
+            shows more of them than fit. The vertical padding (cancelled by the
+            negative margin) keeps the command-count badge inside the scroller,
+            which would otherwise clip it. */}
+        <PromptInputFooter className="flex-wrap gap-y-1 max-sm:flex-nowrap max-sm:gap-x-1 max-sm:px-2 max-sm:py-1.5">
+          <PromptInputTools className="scrollbar-hide min-w-0 max-sm:-my-1.5 max-sm:flex-1 max-sm:gap-0.5 max-sm:overflow-x-auto max-sm:py-1.5 max-sm:[&>*]:shrink-0">
             <PromptInputButton
               tooltip={{ content: t('input.attachFiles') }}
               onClick={openAttachmentPicker}
@@ -556,7 +565,7 @@ export default function ChatComposer({
 
           </PromptInputTools>
 
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
             <ScheduleMessagePopover
               disabled={!input.trim()}
               onSchedule={onScheduleMessage}
@@ -632,7 +641,7 @@ export default function ChatComposer({
                 }
                 aria-label={submitAriaLabel}
                 title={submitAriaLabel}
-                className="h-10 w-10 sm:h-10 sm:w-10"
+                className="h-9 w-9 sm:h-10 sm:w-10"
               >
                 {isTranscribing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
