@@ -159,9 +159,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             <div className="mt-1.5 flex justify-end">
               <div
                 dir="auto"
-                className="max-w-[85%] break-words rounded-2xl rounded-br-md border border-border bg-muted px-3 py-2 font-serif text-sm text-foreground shadow-sm dark:bg-gray-800"
+                className="max-w-[85%] break-words rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 font-serif text-sm text-white shadow-sm"
               >
-                <Markdown breaks className="prose prose-sm max-w-none font-serif dark:prose-invert">
+                <Markdown breaks className="prose prose-sm prose-invert max-w-none font-serif [&_a]:text-blue-100 [&_a]:underline">
                   {message.content}
                 </Markdown>
               </div>
@@ -191,24 +191,26 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             {message.files && message.files.length > 0 && (
               <ChatMessageFiles files={message.files} />
             )}
+            {/* Solid blue with white text: upstream's faint muted bubble read worse on
+                a desktop monitor, so we keep our previous look. */}
             {userCopyContent.trim().length > 0 || (!message.images?.length && !message.files?.length) ? (
-              <div className="group max-w-full rounded-2xl rounded-br-md border border-border/60 bg-muted/60 px-3 py-2 text-foreground shadow-sm dark:bg-gray-800/60 sm:px-4">
+              <div className="group max-w-full rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:px-4">
                 <div dir="auto" className="break-words font-serif text-sm">
                   <Markdown
                     breaks
-                    className="prose prose-sm max-w-none font-serif dark:prose-invert"
+                    className="prose prose-sm prose-invert max-w-none font-serif [&_a]:text-blue-100 [&_a]:underline"
                   >
                     {message.content}
                   </Markdown>
                 </div>
-                <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
+                <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
                   {onEditMessage && message.transcriptAnchorId && (
                     <button
                       type="button"
                       onClick={() => onEditMessage(message)}
                       title={t('message.editAndResend')}
                       aria-label={t('message.editAndResend')}
-                      className="rounded p-1 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+                      className="rounded p-1 opacity-0 transition-opacity hover:bg-white/15 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
                     >
                       <PencilIcon className="h-3.5 w-3.5" />
                     </button>
@@ -219,7 +221,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                       onClick={() => onForkFromMessage(message)}
                       title={t('message.forkFromHere')}
                       aria-label={t('message.forkFromHere')}
-                      className="rounded p-1 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+                      className="rounded p-1 opacity-0 transition-opacity hover:bg-white/15 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
                     >
                       <GitBranchIcon className="h-3.5 w-3.5" />
                     </button>

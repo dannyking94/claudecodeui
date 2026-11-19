@@ -165,8 +165,9 @@ const MessageCopyControl = ({
     setIsDropdownOpen(false);
   };
 
+  // The user bubble is solid blue, so its controls are light on blue.
   const toneClass = messageType === 'user'
-    ? 'text-muted-foreground hover:text-foreground'
+    ? 'text-blue-100 hover:text-white'
     : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300';
   const copyTitle = copied ? t('copyMessage.copied') : t('copyMessage.copy');
   const rootClassName = canSelectCopyFormat

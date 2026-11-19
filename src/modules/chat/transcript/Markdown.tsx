@@ -114,7 +114,7 @@ const CodeBlock = ({ node: _node, className, children, forceBlock, ...props }: C
   if (shouldInline) {
     return (
       <code
-        className={`whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[0.875em] text-foreground ${className || ''
+        className={`whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[0.9em] text-foreground ${className || ''
           }`}
         {...props}
       >
@@ -132,7 +132,7 @@ const CodeBlock = ({ node: _node, className, children, forceBlock, ...props }: C
   }
 
   return (
-    <div className="group my-3 overflow-hidden rounded-xl border border-border bg-muted/50 shadow-sm dark:bg-zinc-900">
+    <div className="group my-3 overflow-hidden rounded-xl border border-border bg-muted shadow-sm dark:bg-zinc-900">
       {/* Label row shares the block's background — no divider, ChatGPT-style */}
       <div className="flex items-center justify-between px-4 pt-2">
         <span className="select-none text-xs text-muted-foreground">{languageLabel}</span>
@@ -184,7 +184,8 @@ const CodeBlock = ({ node: _node, className, children, forceBlock, ...props }: C
         customStyle={{
           margin: 0,
           borderRadius: 0,
-          fontSize: '0.8125rem',
+          // 0.875rem as before the v1.37.9 merge; 0.8125rem rendered code at ~11px.
+          fontSize: '0.875rem',
           lineHeight: 1.6,
           padding: '0.5rem 1rem 1rem',
           // The container owns the background so the label row and code read as one panel.
@@ -240,7 +241,7 @@ const markdownComponents = {
     return <>{children}</>;
   },
   blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote className="my-3 border-l-2 border-primary/50 pl-4 italic text-muted-foreground">
+    <blockquote className="my-3 border-l-2 border-primary/50 pl-4 italic text-gray-600 dark:text-gray-400">
       {children}
     </blockquote>
   ),
