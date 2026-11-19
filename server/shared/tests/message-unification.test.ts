@@ -189,14 +189,14 @@ test('a huge tool output is capped, and says how much it dropped', () => {
       toolName: 'Read',
       toolId: 'r1',
       toolInput: { file_path: '/tmp/shot.png' },
-      toolResult: { content: body, toolUseResult: { file: { base64: body } } },
+      toolResult: { content: body, toolUseResult: { file: { content: body } } },
     }),
   ]);
 
   const content = String(unified.toolResult?.content);
   assert.ok(content.length < body.length / 2, 'the output must not survive at full size');
   assert.match(content, /… 80000 more characters$/);
-  const nested = (unified.toolResult?.toolUseResult as { file: { base64: string } }).file.base64;
+  const nested = (unified.toolResult?.toolUseResult as { file: { content: string } }).file.content;
   assert.equal(nested, content, 'the structured copy is capped the same way');
 });
 
@@ -215,4 +215,26 @@ test('a search result keeps every file it found', () => {
   const result = unified.toolResult?.toolUseResult as { filenames: string[]; numFiles: number };
   assert.equal(result.numFiles, 900);
   assert.deepEqual(result.filenames, filenames);
+});
+
+test('a Read of an image keeps its metadata but not its undecodable base64 bytes', () => {
+  const base64 = 'A'.repeat(1_200_000);
+  const [unified] = prepareTranscriptMessages([
+    message({
+      kind: 'tool_use',
+      toolName: 'Read',
+      toolId: 'r1',
+      toolInput: { file_path: '/tmp/shot.png' },
+      toolResult: {
+        content: '',
+        toolUseResult: { type: 'image', file: { base64, type: 'image/png', originalSize: 900_000 } },
+      },
+    }),
+  ]);
+
+  const file = (unified.toolResult?.toolUseResult as { file: Record<string, unknown> }).file;
+  assert.equal(file.type, 'image/png');
+  assert.equal(file.originalSize, 900_000);
+  assert.equal(file.base64, '[1200000 characters of base64 omitted]');
+  assert.ok(JSON.stringify(unified).length < 1_000, 'the row ships metadata only');
 });

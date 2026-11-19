@@ -4,6 +4,7 @@ import { scan } from 'react-scan'
 
 import App from '@/App'
 import { isIOSBrowserTab, isWebKitEngine } from '@/shared/browserEngine'
+import { startCrashBreadcrumbs } from '@/shared/crashBreadcrumbs'
 import { markDocumentScrollEnabled } from '@/shared/documentScroll'
 import '@/index.css'
 import 'katex/dist/katex.min.css'
@@ -17,6 +18,10 @@ import '@/modules/i18n'
 // render bug and worth none of it the rest of the time, so it is opt-in —
 // `localStorage.setItem('react-scan', 'on')` and reload.
 scan({ enabled: import.meta.env.DEV && localStorage.getItem('react-scan') === 'on' })
+
+// Before anything heavy runs, so a page the browser kills during boot or the
+// first render still leaves a record (`?crashDebug=1` shows the log).
+startCrashBreadcrumbs()
 
 // Engine class for CSS that must never apply on WebKit regardless of what
 // @supports reports (see `.chat-message` in index.css).

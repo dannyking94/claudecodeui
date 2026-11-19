@@ -315,6 +315,19 @@ function truncateOutput(value: string): string {
 }
 
 /**
+ * Encoded file bytes under a `base64` key (Claude's `Read` of an image records
+ * `{ type: 'image', file: { base64 } }`) are dropped rather than capped: a cut
+ * base64 string cannot be decoded, and the transcript never draws a `Read`
+ * result, so the capped prefix was pure weight — ~40 KB per screenshot, 43% of
+ * one secretary session's whole history payload. Short values are left alone.
+ */
+const MAX_INLINE_BASE64 = 1_000;
+
+function omitEncodedBytes(value: string): string {
+  return `[${value.length} characters of base64 omitted]`;
+}
+
+/**
  * Applies the same cap to every string inside a provider's structured result.
  *
  * The structure is preserved rather than dropped wholesale because the
@@ -338,7 +351,9 @@ export function truncateNestedOutput(value: unknown): unknown {
 
   const truncated: AnyRecord = {};
   for (const [key, entry] of Object.entries(record)) {
-    truncated[key] = truncateNestedOutput(entry);
+    truncated[key] = key === 'base64' && typeof entry === 'string' && entry.length > MAX_INLINE_BASE64
+      ? omitEncodedBytes(entry)
+      : truncateNestedOutput(entry);
   }
   return truncated;
 }
