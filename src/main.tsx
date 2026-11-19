@@ -30,6 +30,31 @@ if (isIOSBrowserTab()) {
   document.documentElement.classList.add('ios-browser-tab')
 }
 
+// `?layoutDebug=1`: on-screen viewport/safe-area dump for diagnosing how the
+// page sits behind a phone browser's own bars (src/shared/layoutDebug.ts). Kept
+// for the browser session so it survives the login redirect; `?layoutDebug=0`
+// clears it. The panel is a separate chunk, fetched only when asked for.
+function isLayoutDebugRequested(): boolean {
+  const STORAGE_KEY = 'cloudcli:layout-debug'
+  try {
+    const param = new URLSearchParams(window.location.search).get('layoutDebug')
+    if (param !== null) {
+      if (param === '0' || param === 'false' || param === 'off') {
+        window.sessionStorage.removeItem(STORAGE_KEY)
+      } else {
+        window.sessionStorage.setItem(STORAGE_KEY, '1')
+      }
+    }
+    return window.sessionStorage.getItem(STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+if (isLayoutDebugRequested()) {
+  void import('@/shared/layoutDebug').then(({ mountLayoutDebugOverlay }) => mountLayoutDebugOverlay())
+}
+
 // Panels are code-split, and a rebuild replaces every hashed chunk. A tab
 // opened before the rebuild (iOS keeps them around for days) would fail to
 // import a panel it has not loaded yet; reload once to pick up the new build
