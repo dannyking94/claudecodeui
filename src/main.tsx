@@ -31,8 +31,8 @@ if (isIOSBrowserTab()) {
   document.documentElement.classList.add('ios-browser-tab')
 }
 
-// Experimental `?docScroll=1`: the chat scrolls the document so Safari can
-// collapse its toolbar (src/shared/documentScroll.ts).
+// iPhone/iPad browser tab: the chat scrolls the document so Safari can collapse
+// its toolbar; `?docScroll=0` opts a browser out (src/shared/documentScroll.ts).
 markDocumentScrollEnabled()
 
 // `?layoutDebug=1`: on-screen viewport/safe-area dump for diagnosing how the

@@ -5,7 +5,7 @@ import { afterEach, test, vi } from 'vitest';
 import { captureScrollAnchor, restoreScrollAnchor } from '@/modules/chat/utils/scrollAnchor';
 
 /**
- * In the experimental document-scroll mode the chat's scroller is <html>,
+ * In document-scroll mode (iPhone/iPad browser tab) the chat's scroller is <html>,
  * whose own rect moves with the scroll offset. Anchoring must then measure
  * from the top of the screen, not from that rect, or it would always pick the
  * first message and never see the one at the reading line.

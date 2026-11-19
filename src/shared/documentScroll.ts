@@ -1,19 +1,20 @@
 import { isIOSBrowserTab } from '@/shared/browserEngine';
 
 /**
- * EXPERIMENTAL, opt-in: the chat transcript scrolls the document instead of an
- * inner container.
+ * Document-scroll mode: in an iPhone/iPad browser tab the chat transcript
+ * scrolls the document instead of an inner container.
  *
  * iOS Safari collapses its toolbar to a small pill only when the document
- * itself scrolls; an inner `overflow: auto` box never triggers it. With this
- * mode on, in an iPhone/iPad browser tab, the Chat tab lets the page grow with
- * the transcript, keeps the header and the composer `position: sticky`, and
- * the chat's scroll logic drives `document.documentElement` instead of the
- * transcript pane (`.doc-scroll-active` in index.css, `getChatScrollRoot`).
+ * itself scrolls; an inner `overflow: auto` box never triggers it. In this
+ * mode the Chat tab lets the page grow with the transcript, keeps the header
+ * and the composer `position: sticky`, and the chat's scroll logic drives
+ * `document.documentElement` instead of the transcript pane
+ * (`.doc-scroll-active` in index.css, `isDocumentScroller`).
  *
- * Off by default because none of it can be exercised without a real phone.
- * `?docScroll=1` turns it on for this browser (kept in localStorage),
- * `?docScroll=0` turns it off again.
+ * On by default in an iPhone/iPad browser tab (`isIOSBrowserTab`). Desktop,
+ * Android and Home Screen web apps never use it. The escape hatch is
+ * `?docScroll=0`: it is remembered in localStorage for that browser and wins
+ * over the default on every later visit, until `?docScroll=1` re-enables it.
  */
 
 const STORAGE_KEY = 'cloudcli:doc-scroll';
@@ -26,18 +27,20 @@ function readEnabled(): boolean {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     return false;
   }
+  if (!isIOSBrowserTab()) {
+    return false;
+  }
   try {
     const param = new URLSearchParams(window.location.search).get('docScroll');
     if (param !== null) {
-      if (param === '0' || param === 'false' || param === 'off') {
-        window.localStorage.removeItem(STORAGE_KEY);
-      } else {
-        window.localStorage.setItem(STORAGE_KEY, '1');
-      }
+      const isOptOut = param === '0' || param === 'false' || param === 'off';
+      window.localStorage.setItem(STORAGE_KEY, isOptOut ? '0' : '1');
     }
-    return window.localStorage.getItem(STORAGE_KEY) === '1' && isIOSBrowserTab();
+    // Only a stored opt-out turns the default off.
+    return window.localStorage.getItem(STORAGE_KEY) !== '0';
   } catch {
-    return false;
+    // Storage is unavailable (private mode): the default still applies.
+    return true;
   }
 }
 
