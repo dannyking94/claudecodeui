@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtempSync, readFileSync, rmSync, statSync, existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -318,11 +318,144 @@ test('an inbox that never answers times out into the refusal', async () => {
   const server = net.createServer((socket) => sockets.push(socket));
   await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
   try {
-    const result = await deliverToSecretaryInbox(socketPath, 'hello', 100);
+    const result = await deliverToSecretaryInbox(socketPath, 'hello', [], 100);
     assert.deepEqual(result, { ok: false, reason: 'the inbox did not answer within 100 ms' });
   } finally {
     sockets.forEach((socket) => socket.destroy());
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+/** Puts an uploaded image in the (scratch) global upload store, as the chat gateway does. */
+async function uploadedImage(name = 'shot.png', bytes = Buffer.from('\x89PNG fake image bytes')) {
+  const assets = path.join(scratchHome, '.cloudcli', 'assets');
+  await mkdir(assets, { recursive: true });
+  const filePath = path.join(assets, `1700000000-${name}`);
+  await writeFile(filePath, bytes);
+  return { path: filePath, name, mimeType: 'image/png', bytes };
+}
+
+test('an image-only message is delivered with its files, staged privately and cleaned up after', async () => {
+  const image = await uploadedImage();
+  const seen: AnyRecord[] = [];
+  const inbox = await startFakeInbox((request) => {
+    // The bridge copies before it answers; at this point the staged file must exist.
+    for (const file of request.files ?? []) {
+      seen.push({
+        ...file,
+        bytes: readFileSync(file.path),
+        mode: statSync(file.path).mode & 0o777,
+        dirMode: statSync(path.dirname(file.path)).mode & 0o777,
+      });
+    }
+    return { ok: true, id: 'm-2', room: 'local/owner', files: request.files.length };
+  });
+  const spawns: AnyRecord[] = [];
+  restoreDependencies = overrideClaudeRuntimeDependencies({
+    findSessionHolder: async () => registeredSecretary(inbox.socketPath),
+    noteSecretaryDelivery: async () => {},
+  });
+  const writer = createWriter();
+  try {
+    await queryClaudeSDK('  ', { sessionId: APP_SESSION_ID, images: [image] }, writer, createContext(spawns));
+  } finally {
+    await inbox.close();
+  }
+
+  assert.equal(spawns.length, 0);
+  const [request] = inbox.received;
+  assert.equal(request.text, '');
+  assert.equal(request.files.length, 1);
+  const [file] = seen;
+  assert.equal(file.name, 'shot.png');
+  assert.equal(file.mime, 'image/png');
+  const day = new Date().toISOString().slice(0, 10);
+  assert.equal(path.dirname(file.path), path.join(scratchHome, '.cloudcli', 'inbox-uploads', day));
+  assert.ok(path.isAbsolute(file.path));
+  assert.deepEqual(file.bytes, image.bytes);
+  assert.equal(file.mode, 0o600);
+  assert.equal(file.dirMode, 0o700);
+  assert.equal(existsSync(file.path), false, 'the staged copy is removed once the bridge answered');
+  assert.equal(existsSync(image.path), true, 'the upload itself is untouched');
+
+  const [notice, complete] = writer.sent;
+  assert.equal(notice.kind, 'task_notification');
+  assert.match(notice.summary, /^Delivered to the dk-ai-0 secretary/);
+  assert.doesNotMatch(notice.summary, /not forwarded|not sent/);
+  assert.equal(complete.exitCode, 0);
+});
+
+test('a bridge that predates attachments takes the text and the row says the files were not forwarded', async () => {
+  const image = await uploadedImage();
+  const inbox = await startFakeInbox(() => ({ ok: true, id: 'm-3', room: 'local/owner' }));
+  restoreDependencies = overrideClaudeRuntimeDependencies({
+    findSessionHolder: async () => registeredSecretary(inbox.socketPath),
+    noteSecretaryDelivery: async () => {},
+  });
+  const writer = createWriter();
+  try {
+    await queryClaudeSDK('look at this', { sessionId: APP_SESSION_ID, images: [image] }, writer, createContext([]));
+  } finally {
+    await inbox.close();
+  }
+
+  assert.equal(inbox.received[0].text, 'look at this');
+  assert.equal(inbox.received[0].files.length, 1);
+  assert.match(writer.sent[0].summary, /1 attachment\(s\) were not forwarded — this secretary's bridge carries text only\./);
+  assert.equal(writer.sent[1].exitCode, 0);
+});
+
+test('an attachment-only message to a bridge that predates attachments keeps the refusal, saying why', async () => {
+  const image = await uploadedImage();
+  const inbox = await startFakeInbox((request) => (request.text
+    ? { ok: true }
+    : { ok: false, error: 'text is missing or blank' }));
+  restoreDependencies = overrideClaudeRuntimeDependencies({
+    findSessionHolder: async () => registeredSecretary(inbox.socketPath),
+  });
+  const writer = createWriter();
+  try {
+    await queryClaudeSDK('', { sessionId: APP_SESSION_ID, images: [image] }, writer, createContext([]));
+  } finally {
+    await inbox.close();
+  }
+
+  const [error, complete] = writer.sent;
+  assert.equal(error.errorCode, 'session_held_elsewhere');
+  assert.match(error.content, /predates inbox attachments/);
+  assert.equal(complete.exitCode, 1);
+});
+
+test('an attachment outside the upload store is not staged, and the row says so', async () => {
+  const outside = path.join(scratchHome, 'secret.txt');
+  await writeFile(outside, 'secret');
+  const inbox = await startFakeInbox((request) => ({ ok: true, files: request.files?.length ?? 0 }));
+  restoreDependencies = overrideClaudeRuntimeDependencies({
+    findSessionHolder: async () => registeredSecretary(inbox.socketPath),
+    noteSecretaryDelivery: async () => {},
+  });
+  const writer = createWriter();
+  try {
+    await queryClaudeSDK('hi', {
+      sessionId: APP_SESSION_ID,
+      cwd: path.join(scratchHome, 'project'),
+      files: [{ path: outside, name: 'secret.txt' }],
+    }, writer, createContext([]));
+  } finally {
+    await inbox.close();
+  }
+
+  assert.equal(inbox.received[0].files, undefined, 'no files key when nothing was staged');
+  assert.match(writer.sent[0].summary, /1 attachment\(s\) were not sent: secret\.txt: not in the upload store\./);
+});
+
+test('a message with neither text nor attachments is refused without touching the inbox', async () => {
+  restoreDependencies = overrideClaudeRuntimeDependencies({
+    findSessionHolder: async () => registeredSecretary('/nonexistent.sock'),
+    deliverToSecretaryInbox: async () => assert.fail('nothing to deliver'),
+  });
+  const writer = createWriter();
+  await queryClaudeSDK('   ', { sessionId: APP_SESSION_ID }, writer, createContext([]));
+  assert.match(writer.sent[0].content, /neither text nor attachments/);
 });

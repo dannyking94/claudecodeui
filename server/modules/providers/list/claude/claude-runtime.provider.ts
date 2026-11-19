@@ -23,6 +23,7 @@ import type { ElicitationRequest, ElicitationResult, SDKUserMessage } from '@ant
 import {
   appendFilesInputTag,
   buildClaudeUserContent,
+  normalizeAttachmentDescriptors,
   normalizeImageDescriptors
 } from '@/shared/image-attachments.js';
 import {
@@ -38,7 +39,10 @@ import {
   findClaudeSessionHolder,
 } from '@/modules/providers/list/claude/claude-session-hold.provider.js';
 import { claudeSecretaryActivity } from '@/modules/providers/list/claude/claude-secretary-activity.provider.js';
-import { deliverToSecretaryInbox } from '@/modules/providers/list/claude/claude-secretary-inbox.provider.js';
+import {
+  deliverToSecretaryInbox,
+  stageInboxUploads,
+} from '@/modules/providers/list/claude/claude-secretary-inbox.provider.js';
 import { restampClaudeTranscriptEntrypoint } from '@/modules/providers/list/claude/claude-transcript-entrypoint.provider.js';
 import {
   createNotificationEvent,
@@ -193,7 +197,11 @@ const loopWakeupWatchdogs = new Map<string, LoopWakeupWatchdog>();
  */
 const runtimeDependencies = {
   findSessionHolder: findClaudeSessionHolder as (sessionId: string) => Promise<Awaited<ReturnType<typeof findClaudeSessionHolder>>>,
-  deliverToSecretaryInbox: deliverToSecretaryInbox as (socketPath: string, text: string) => ReturnType<typeof deliverToSecretaryInbox>,
+  deliverToSecretaryInbox: deliverToSecretaryInbox as (
+    socketPath: string,
+    text: string,
+    files?: Parameters<typeof deliverToSecretaryInbox>[2],
+  ) => ReturnType<typeof deliverToSecretaryInbox>,
   noteSecretaryDelivery: (providerSessionId: string, appSessionId: string): unknown =>
     claudeSecretaryActivity.noteDelivered(providerSessionId, appSessionId),
 };
@@ -217,7 +225,11 @@ export function overrideClaudeRuntimeDependencies(overrides: Partial<typeof runt
  *
  * A registered secretary with a local inbox gets the message posted into its
  * chat bridge instead, as an owner message; the row shows it as delivered and
- * the answer arrives in the transcript this row already renders. Anything else
+ * the answer arrives in the transcript this row already renders. Attached
+ * images and files are staged as private copies and sent as the request's
+ * `files`, so a message may be attachments alone; a bridge that predates
+ * attachments takes the text and the row says the files were not forwarded
+ * (or, for an attachment-only message, refuses it as before). Anything else
  * — no inbox, an unreachable one, an inbox error, or a holder that is not a
  * registered secretary — is refused with the reason.
  *
@@ -244,26 +256,37 @@ async function refuseIfHeldElsewhere(
   let inboxFailure: string | undefined;
   if (holder.registryName) {
     const text = typeof command === 'string' ? command.trim() : '';
+    const attachments = [
+      ...normalizeAttachmentDescriptors(options.images),
+      ...normalizeAttachmentDescriptors(options.files),
+    ];
     if (!holder.inbox) {
       inboxFailure = 'it publishes no inbox socket in the registry';
-    } else if (!text) {
-      inboxFailure = 'the inbox carries text only, and this message has none';
+    } else if (!text && attachments.length === 0) {
+      inboxFailure = 'this message has neither text nor attachments';
     } else {
-      const delivery = await runtimeDependencies.deliverToSecretaryInbox(holder.inbox, text);
+      const staged = await stageInboxUploads(attachments, options.cwd);
+      let delivery: Awaited<ReturnType<typeof runtimeDependencies.deliverToSecretaryInbox>>;
+      if (!text && staged.files.length === 0) {
+        delivery = { ok: false, reason: `none of its attachments could be sent (${staged.skipped.join('; ')})` };
+      } else {
+        try {
+          delivery = await runtimeDependencies.deliverToSecretaryInbox(holder.inbox, text, staged.files);
+        } finally {
+          // The bridge copies each file into its own store before it answers.
+          await staged.cleanup();
+        }
+      }
       if (delivery.ok) {
         console.log(
           `[Claude SDK] Delivered a message for ${providerSessionId} to secretary ${holder.registryName}'s inbox `
-          + `(id ${delivery.id ?? 'none'}, room ${delivery.room ?? 'unknown'}).`,
+          + `(id ${delivery.id ?? 'none'}, room ${delivery.room ?? 'unknown'}, files ${delivery.files}/${staged.files.length}).`,
         );
-        const attachmentCount = (options.images?.length || 0) + (options.files?.length || 0);
-        const attachmentNote = attachmentCount > 0
-          ? ` ${attachmentCount} attachment(s) were not forwarded — the inbox carries text only.`
-          : '';
         ws.send(createNormalizedMessage({
           kind: 'task_notification',
           status: 'completed',
           summary: `Delivered to the ${holder.registryName} secretary — its reply will appear in this transcript.`
-            + attachmentNote,
+            + describeUnforwarded(staged.files.length, delivery.files, staged.skipped),
           sessionId: rowSessionId,
           provider: 'claude',
         }));
@@ -276,7 +299,9 @@ async function refuseIfHeldElsewhere(
           .catch((error) => console.warn(`[Claude SDK] Secretary activity update failed: ${error?.message ?? error}`));
         return true;
       }
-      inboxFailure = delivery.reason;
+      inboxFailure = !text && /text is missing/.test(delivery.reason)
+        ? 'its bridge predates inbox attachments and carries text only, and this message has none'
+        : delivery.reason;
     }
   }
 
@@ -295,6 +320,24 @@ async function refuseIfHeldElsewhere(
   }));
   ws.send(createCompleteMessage({ provider: 'claude', sessionId: rowSessionId, exitCode: 1 }));
   return true;
+}
+
+/**
+ * The row's note about attachments that did not reach the secretary: ones the
+ * bridge did not take (a bridge older than attachments answers with no `files`
+ * count) and ones that were never staged.
+ */
+function describeUnforwarded(sent: number, taken: number, skipped: string[]): string {
+  let note = '';
+  if (taken < sent) {
+    note += taken === 0
+      ? ` ${sent} attachment(s) were not forwarded — this secretary's bridge carries text only.`
+      : ` ${sent - taken} of ${sent} attachment(s) were not taken by the bridge.`;
+  }
+  if (skipped.length > 0) {
+    note += ` ${skipped.length} attachment(s) were not sent: ${skipped.join('; ')}.`;
+  }
+  return note;
 }
 
 // An MCP server's request for input travels as a permission request under this
