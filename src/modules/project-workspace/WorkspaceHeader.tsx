@@ -103,13 +103,13 @@ export default function WorkspaceHeader({
   };
 
   return (
-    <header className="flex-shrink-0 border-b border-border/60 bg-background/95 px-3 py-1.5 pt-[calc(env(safe-area-inset-top,0px)+0.375rem)] backdrop-blur-sm sm:px-4 sm:py-2 sm:pt-[calc(env(safe-area-inset-top,0px)+0.5rem)]">
+    <header className="workspace-header flex-shrink-0 border-b border-border/60 bg-background/95 px-3 py-1.5 pt-[calc(env(safe-area-inset-top,0px)+0.375rem)] backdrop-blur-sm sm:px-4 sm:py-2 sm:pt-[calc(env(safe-area-inset-top,0px)+0.5rem)]">
       {/* One row at every width. On a phone the title keeps a minimum width and
           takes whatever the icon-only tab bar leaves; a tab bar too wide for
           the rest scrolls sideways inside its own box. A second row for the
           tabs cost the transcript ~45px of a screen that has none to spare. */}
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
-        <div className="flex min-w-0 items-center gap-2 max-sm:min-w-[7rem] max-sm:flex-1 sm:max-w-[min(34%,24rem)] sm:flex-[1_1_18rem]">
+        <div className="flex min-w-0 items-center gap-2 max-sm:min-w-28 max-sm:flex-1 sm:max-w-[min(34%,24rem)] sm:flex-[1_1_18rem]">
           {isMobile && <MobileMenuButton onMenuClick={onMenuClick} />}
           <WorkspaceTitle
             activeTab={activeTab}

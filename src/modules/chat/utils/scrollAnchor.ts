@@ -14,6 +14,8 @@
  * element handles both cases without knowing where the growth came from.
  */
 
+import { isDocumentScroller } from '@/shared/documentScroll';
+
 /** Distance in px from the bottom of the scroll range at which we consider the user "following" the conversation. */
 export const NEAR_BOTTOM_THRESHOLD_PX = 120;
 
@@ -27,6 +29,19 @@ export const NEAR_BOTTOM_THRESHOLD_PX = 120;
  */
 export const DETACH_BELOW_PX = 150;
 export const REATTACH_WITHIN_PX = 60;
+
+/**
+ * Top edge of the scroller's viewport in client coordinates.
+ *
+ * For an inner scroll box that is its own top edge. The document scroller's
+ * rect moves with the scroll offset instead (its top is `-scrollTop`), so there
+ * the viewport top is the top of the screen. Messages hidden behind the sticky
+ * header then count as visible, which is harmless: an anchor only has to be a
+ * message near the reading line that stays mounted.
+ */
+function getViewportTop(container: HTMLElement): number {
+  return isDocumentScroller(container) ? 0 : container.getBoundingClientRect().top;
+}
 
 export type ScrollAnchor = {
   element: HTMLElement;
@@ -71,7 +86,7 @@ export function captureScrollAnchor(container: HTMLElement): ScrollAnchor | null
   const messages = container.querySelectorAll<HTMLElement>('.chat-message');
   if (messages.length === 0) return null;
 
-  const containerTop = container.getBoundingClientRect().top;
+  const containerTop = getViewportTop(container);
 
   let lo = 0;
   let hi = messages.length - 1;
@@ -171,7 +186,7 @@ export function restoreScrollAnchor(container: HTMLElement, anchor: ScrollAnchor
   const { element, offset } = anchor;
   if (!element.isConnected || !container.contains(element)) return false;
 
-  const currentOffset = element.getBoundingClientRect().top - container.getBoundingClientRect().top;
+  const currentOffset = element.getBoundingClientRect().top - getViewportTop(container);
   const delta = currentOffset - offset;
 
   // Sub-pixel deltas are layout noise; correcting them would fight momentum

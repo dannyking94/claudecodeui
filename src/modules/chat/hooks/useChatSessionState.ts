@@ -25,6 +25,7 @@ import {
 } from '@/modules/chat/utils/scrollAnchor';
 import type { MotionBaseline, ScrollAnchor } from '@/modules/chat/utils/scrollAnchor';
 import { getIntrinsicMessageKey } from '@/modules/chat/utils/messageKeys';
+import { DOCUMENT_SCROLL_ENABLED, isDocumentScrollActive, isDocumentScroller } from '@/shared/documentScroll';
 import { SCROLL_DEBUG_ENABLED, scrollDebug } from '@/modules/chat/utils/scrollDebug';
 
 const INITIAL_VISIBLE_MESSAGES = 100;
@@ -243,7 +244,13 @@ export function useChatSessionState({
   const [loadAllJustFinished, setLoadAllJustFinished] = useState(false);
   const [showLoadAllOverlay, setShowLoadAllOverlay] = useState(false);
 
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Normally the transcript pane, attached by ChatMessagesPane. In the
+  // experimental document-scroll mode the page itself scrolls, so the ref is
+  // pinned to <html> for the life of the hook and the pane leaves it alone
+  // (src/shared/documentScroll.ts).
+  const scrollContainerRef = useRef<HTMLDivElement>(
+    DOCUMENT_SCROLL_ENABLED ? (document.documentElement as HTMLDivElement) : null,
+  );
   /** Wraps the rendered messages; observed for height changes so lazy reflow can be absorbed. */
   const messagesContentRef = useRef<HTMLDivElement>(null);
   /**
@@ -1595,11 +1602,29 @@ export function useChatSessionState({
     // put it there. Keeping them separate is what lets a programmatic scroll
     // coexist with the detach latch. All passive — none of these preventDefault,
     // and a non-passive touch listener would stall scrolling on iOS.
-    const onTouchStart = () => {
+    //
+    // When the document is the scroller, <html> receives every touch on the
+    // page and `scroll` fires on the window, not on the element. Only gestures
+    // that start in the transcript count as scrolling it, and nothing counts
+    // while another tab has the fixed layout (the page snaps to 0 then).
+    const isRootScroller = isDocumentScroller(container);
+    const scrollTarget: HTMLElement | Window = isRootScroller ? window : container;
+    const concernsTranscript = (event: Event) =>
+      !isRootScroller
+      || (isDocumentScrollActive()
+        && event.target instanceof Element
+        && event.target.closest('.chat-messages-pane') !== null);
+    const onScroll = () => {
+      if (isRootScroller && !isDocumentScrollActive()) return;
+      void handleScroll();
+    };
+    const onTouchStart = (event: Event) => {
+      if (!concernsTranscript(event)) return;
       isTouchingRef.current = true;
       handleUserScrollIntent();
     };
     const onTouchEnd = () => {
+      if (isRootScroller && !isTouchingRef.current) return;
       isTouchingRef.current = false;
       // Momentum continues after the finger lifts; `scroll` keeps the latch and
       // anchor up to date from here, and re-attaches if it coasts to the bottom.
@@ -1616,13 +1641,14 @@ export function useChatSessionState({
     // results fold into their calls) cannot scroll, so it never emits `scroll`.
     // Wheel and touch are then the only way to reach the top pager or the
     // "load all" overlay. When it can scroll, `scroll` alone drives paging.
-    const onMoveIntent = () => {
+    const onMoveIntent = (event: Event) => {
+      if (!concernsTranscript(event)) return;
       handleUserScrollIntent();
       if (container.scrollHeight <= container.clientHeight + 1) void handleScroll();
     };
 
     const options = { passive: true } as const;
-    container.addEventListener('scroll', handleScroll, options);
+    scrollTarget.addEventListener('scroll', onScroll, options);
     container.addEventListener('touchstart', onTouchStart, options);
     container.addEventListener('touchmove', onMoveIntent, options);
     container.addEventListener('touchend', onTouchEnd, options);
@@ -1630,7 +1656,7 @@ export function useChatSessionState({
     container.addEventListener('wheel', onMoveIntent, options);
 
     return () => {
-      container.removeEventListener('scroll', handleScroll);
+      scrollTarget.removeEventListener('scroll', onScroll);
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onMoveIntent);
       container.removeEventListener('touchend', onTouchEnd);

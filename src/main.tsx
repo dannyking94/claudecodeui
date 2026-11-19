@@ -4,6 +4,7 @@ import { scan } from 'react-scan'
 
 import App from '@/App'
 import { isIOSBrowserTab, isWebKitEngine } from '@/shared/browserEngine'
+import { markDocumentScrollEnabled } from '@/shared/documentScroll'
 import '@/index.css'
 import 'katex/dist/katex.min.css'
 
@@ -29,6 +30,10 @@ if (isWebKitEngine()) {
 if (isIOSBrowserTab()) {
   document.documentElement.classList.add('ios-browser-tab')
 }
+
+// Experimental `?docScroll=1`: the chat scrolls the document so Safari can
+// collapse its toolbar (src/shared/documentScroll.ts).
+markDocumentScrollEnabled()
 
 // `?layoutDebug=1`: on-screen viewport/safe-area dump for diagnosing how the
 // page sits behind a phone browser's own bars (src/shared/layoutDebug.ts). Kept

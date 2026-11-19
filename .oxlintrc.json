@@ -99,7 +99,9 @@
           "src/shared/codeEditorSettings.ts",
           "src/shared/userSettings.ts",
           "src/shared/chatDrafts.ts",
-          "src/shared/syntaxHighlighter.ts"
+          "src/shared/syntaxHighlighter.ts",
+          "src/shared/browserEngine.ts",
+          "src/shared/documentScroll.ts"
         ],
         "mode": "file"
       },

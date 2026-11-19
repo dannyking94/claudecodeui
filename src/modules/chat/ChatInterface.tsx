@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
@@ -9,6 +9,7 @@ import PermissionContext from '@/modules/chat/context/PermissionContext';
 import { MarkdownWorkspaceContext } from '@/modules/chat/context/MarkdownWorkspaceContext';
 import { TranscriptSessionContext } from '@/modules/chat/context/TranscriptSessionContext';
 import { api } from '@/shared/api';
+import { setDocumentScrollActive } from '@/shared/documentScroll';
 import type {
   ChatMessage,
   Project,
@@ -77,6 +78,14 @@ function ChatInterface({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { subscribe, isConnected } = useWebSocket();
   const { t } = useTranslation('chat');
+
+  // Experimental document-scroll mode: the page layout follows the Chat tab's
+  // visibility. Declared before useChatSessionState on purpose, so the page is
+  // already scrollable when that hook's layout effect restores the position.
+  useLayoutEffect(() => {
+    setDocumentScrollActive(isActive);
+    return () => setDocumentScrollActive(false);
+  }, [isActive]);
   const processingSessions = useProcessingSessions();
   const {
     markSessionProcessing: onSessionProcessing,
@@ -557,7 +566,7 @@ function ChatInterface({
           </TranscriptSessionContext.Provider>
         </MarkdownWorkspaceContext.Provider>
 
-        <div className="relative flex-shrink-0">
+        <div className="chat-composer-dock relative flex-shrink-0">
           {isUserScrolledUp && chatMessages.length > 0 && (
             <div className="pointer-events-none absolute -top-11 left-0 right-0 z-20 flex justify-center">
               <button

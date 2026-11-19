@@ -19,6 +19,7 @@ import ToolGroupContainer from '@/modules/chat/transcript/ToolGroupContainer';
 import LoadAllMessagesOverlay from '@/modules/chat/transcript/LoadAllMessagesOverlay';
 import ChatExportMenu from '@/modules/chat/transcript/ChatExportMenu';
 import { BackgroundTasksStrip } from '@/modules/chat/transcript/BackgroundTasksStrip';
+import { DOCUMENT_SCROLL_ENABLED } from '@/shared/documentScroll';
 
 /**
  * How many of the newest rows mount with real content on the first commit,
@@ -210,7 +211,8 @@ function ChatMessagesPane({
 
   return (
     <div
-      ref={scrollContainerRef}
+      // In document-scroll mode the ref already points at <html>; see useChatSessionState.
+      ref={DOCUMENT_SCROLL_ENABLED ? undefined : scrollContainerRef}
       className={`chat-messages-pane relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-3 sm:pt-4 ${
         hasActivityIndicator ? 'pb-12 sm:pb-14' : 'pb-3 sm:pb-4'
       }`}

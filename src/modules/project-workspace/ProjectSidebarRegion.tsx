@@ -196,13 +196,13 @@ function ProjectSidebarRegion({
   return (
     <div
       aria-hidden={!sidebarOpen}
-      className="pointer-events-none absolute inset-0 z-50 flex transition-opacity duration-150 ease-out"
+      className="workspace-drawer pointer-events-none absolute inset-0 z-50 flex transition-opacity duration-150 ease-out"
       style={{ opacity: sidebarOpen ? 1 : 0 }}
     >
       {/* A plain dim, not a backdrop blur: blurring the whole app behind the
           drawer made every frame of the slide expensive on iOS. It is its own
           layer because the touch-device rules strip a hovered button's background. */}
-      <div className="absolute inset-0 bg-black/40" />
+      <div className="workspace-drawer-dim absolute inset-0 bg-black/40" />
       <button
         // Hidden on its own: the touch-device rule that forces
         // `pointer-events: auto` on every button would let it swallow taps

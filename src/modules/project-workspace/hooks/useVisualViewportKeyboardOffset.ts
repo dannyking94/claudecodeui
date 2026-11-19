@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 
+import { isDocumentScrollActive } from '@/shared/documentScroll';
+
 /**
  * Keeps the fixed workspace shell above the virtual keyboard in iOS Safari.
  * Returns the ref to attach to the shell container.
@@ -32,6 +34,18 @@ export function useVisualViewportKeyboardOffset<T extends HTMLElement>() {
     // Only resize matters: scrolling moves `offsetTop`, which would make the
     // container bounce if it were tracked too.
     const updateKeyboardHeight = () => {
+      // Document-scroll mode (src/shared/documentScroll.ts): the shell is as
+      // tall as the transcript and Safari itself brings the focused composer
+      // above the keyboard, so sizing the shell here would cut the page short.
+      if (isDocumentScrollActive()) {
+        if (lastBottom !== '' && containerRef.current) {
+          lastBottom = '';
+          containerRef.current.style.bottom = '';
+          containerRef.current.style.height = '';
+          containerRef.current.removeAttribute('data-keyboard-open');
+        }
+        return;
+      }
       const bottom = `${Math.max(0, window.innerHeight - visualViewport.height)}px`;
       if (bottom === lastBottom || !containerRef.current) {
         return;
