@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { scan } from 'react-scan'
 
 import App from '@/App'
-import { isWebKitEngine } from '@/shared/browserEngine'
+import { isIOSBrowserTab, isWebKitEngine } from '@/shared/browserEngine'
 import '@/index.css'
 import 'katex/dist/katex.min.css'
 
@@ -21,6 +21,13 @@ scan({ enabled: import.meta.env.DEV && localStorage.getItem('react-scan') === 'o
 // @supports reports (see `.chat-message` in index.css).
 if (isWebKitEngine()) {
   document.documentElement.classList.add('engine-webkit')
+}
+
+// Browser-tab layout on iPhone/iPad: the workspace shell is laid out in flow
+// instead of `fixed`, so Safari draws it behind its own bars (see
+// `.ios-browser-tab` in index.css). Home Screen web apps keep the fixed shell.
+if (isIOSBrowserTab()) {
+  document.documentElement.classList.add('ios-browser-tab')
 }
 
 // Panels are code-split, and a rebuild replaces every hashed chunk. A tab

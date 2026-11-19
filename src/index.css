@@ -167,6 +167,39 @@
     --keyboard-aware-safe-bottom: 0px;
   }
 
+  /* iPhone/iPad browser tab, not a Home Screen app (class set in src/main.tsx).
+     iOS 26 Safari clips a `position: fixed` element at the top of its floating
+     toolbar and fills the band below with a colour of its own, so a fixed shell
+     can never reach behind the toolbar; only in-flow content is drawn behind
+     the glass (https://developer.apple.com/forums/thread/800798,
+     https://bugs.webkit.org/show_bug.cgi?id=301756). So in a tab the shell is
+     taken out of the fixed layer: absolutely positioned against the initial
+     containing block and sized to the large viewport, it runs from the top of
+     the page to the bottom of the screen. The document still cannot scroll
+     (html keeps overflow: hidden), so nothing moves under the chat's own
+     scroller. While the keyboard is up the shell is sized inline to the visual
+     viewport (useVisualViewportKeyboardOffset). */
+  html.ios-browser-tab,
+  html.ios-browser-tab body {
+    height: 100lvh;
+  }
+
+  html.ios-browser-tab .workspace-shell {
+    position: absolute;
+    bottom: auto;
+    height: 100lvh;
+  }
+
+  /* Keep the composer above the toolbar it now extends behind.
+     --browser-toolbar-overlap is measured on the shell by
+     useBrowserToolbarOverlap; while the keyboard is open it stays 0. */
+  html.ios-browser-tab .workspace-shell:not([data-keyboard-open]) {
+    --keyboard-aware-safe-bottom: max(
+      env(safe-area-inset-bottom, 0px),
+      calc(var(--browser-toolbar-overlap, 0px) + 0.5rem)
+    );
+  }
+
   /* Global transition defaults */
   button, 
   a, 

@@ -49,6 +49,7 @@ test('marks the shell while the keyboard lifts it and clears the mark when it cl
     fakeViewport.dispatchEvent(new Event('resize'));
   });
   assert.equal(shell.style.bottom, '352px');
+  assert.equal(shell.style.height, '560px');
   assert.equal(shell.hasAttribute('data-keyboard-open'), true);
 
   act(() => {
@@ -56,5 +57,6 @@ test('marks the shell while the keyboard lifts it and clears the mark when it cl
     fakeViewport.dispatchEvent(new Event('resize'));
   });
   assert.equal(shell.style.bottom, '0px');
+  assert.equal(shell.style.height, '');
   assert.equal(shell.hasAttribute('data-keyboard-open'), false);
 });

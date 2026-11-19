@@ -13,6 +13,11 @@ import { useEffect, useRef } from 'react';
  * home-indicator padding under the composer (`--keyboard-aware-safe-bottom`):
  * the keyboard covers that band, so the inset would only open a gap. The
  * attribute changes only when the keyboard opens or closes, not per frame.
+ *
+ * It also writes `height` while lifted: in an iPhone browser tab the shell is
+ * not fixed but absolutely positioned at the large-viewport height
+ * (`.ios-browser-tab` in index.css), where `bottom` alone would be ignored.
+ * For the fixed shell the height equals what `bottom` already gives.
  */
 export function useVisualViewportKeyboardOffset<T extends HTMLElement>() {
   const containerRef = useRef<T>(null);
@@ -32,8 +37,10 @@ export function useVisualViewportKeyboardOffset<T extends HTMLElement>() {
         return;
       }
       lastBottom = bottom;
+      const isKeyboardOpen = bottom !== '0px';
       containerRef.current.style.bottom = bottom;
-      containerRef.current.toggleAttribute('data-keyboard-open', bottom !== '0px');
+      containerRef.current.style.height = isKeyboardOpen ? `${visualViewport.height}px` : '';
+      containerRef.current.toggleAttribute('data-keyboard-open', isKeyboardOpen);
     };
 
     visualViewport.addEventListener('resize', updateKeyboardHeight);

@@ -6,6 +6,7 @@ import ProjectCommandPalette from '@/modules/project-workspace/ProjectCommandPal
 import ProjectMainRegion from '@/modules/project-workspace/ProjectMainRegion';
 import ProjectQuickSettingsRegion from '@/modules/project-workspace/ProjectQuickSettingsRegion';
 import ProjectSidebarRegion from '@/modules/project-workspace/ProjectSidebarRegion';
+import { useBrowserToolbarOverlap } from '@/modules/project-workspace/hooks/useBrowserToolbarOverlap';
 import { useVisualViewportKeyboardOffset } from '@/modules/project-workspace/hooks/useVisualViewportKeyboardOffset';
 
 /** Rendered by ProjectWorkspaceRoute to lay out the workspace sidebar, main region and global overlays. */
@@ -16,15 +17,18 @@ function ProjectWorkspaceShell({
   navigate,
 }: ProjectWorkspaceShellProps) {
   const shellRef = useVisualViewportKeyboardOffset<HTMLDivElement>();
+  useBrowserToolbarOverlap(shellRef);
 
   return (
     // Edge to edge on purpose: the background fills the rounded corners, the
     // Dynamic Island band and the home-indicator band; the header, composer
     // and sidebar pad their own content by the safe-area insets. The side
-    // insets only matter in landscape.
+    // insets only matter in landscape. In an iPhone browser tab `.workspace-shell`
+    // swaps `fixed` for an in-flow large-viewport box so Safari draws it behind
+    // its floating toolbar too (`.ios-browser-tab` in index.css).
     <div
       ref={shellRef}
-      className="fixed inset-0 flex bg-background pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]"
+      className="workspace-shell fixed inset-0 flex bg-background pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]"
     >
       <ProjectEffects navigate={navigate} />
       <ProjectSidebarRegion isMobile={isMobile} />
