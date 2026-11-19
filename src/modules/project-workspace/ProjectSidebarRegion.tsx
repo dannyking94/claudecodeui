@@ -182,21 +182,32 @@ function ProjectSidebarRegion({
   // sidebar row. `visibility` on the wrapper would likewise start a transition
   // on every `transition-all` row; instead the panel sits off-screen, the
   // wrapper is always click-through and only the leaf close button hides.
+  //
+  // `absolute`, not `fixed`, for the wrapper, the dim and the close button: they
+  // fill the workspace shell, which is their containing block either way. iOS 26
+  // Safari colours the bands behind its status bar and toolbar from whichever
+  // viewport-sized fixed element sits at the midpoint of a screen edge, and
+  // neither `opacity: 0` on an ancestor nor `pointer-events: none` exempts it.
+  // As a fixed layer the closed drawer's dim was picked as a "dimming layer"
+  // and blended over the page background, so both bands were painted
+  // 40%-black-on-cream grey for as long as the app was open (WebKit
+  // LocalFrameView::fixedContainerEdges, PageColorSampler::finishedFixedContainerColor;
+  // https://bugs.webkit.org/show_bug.cgi?id=302272).
   return (
     <div
       aria-hidden={!sidebarOpen}
-      className="pointer-events-none fixed inset-0 z-50 flex transition-opacity duration-150 ease-out"
+      className="pointer-events-none absolute inset-0 z-50 flex transition-opacity duration-150 ease-out"
       style={{ opacity: sidebarOpen ? 1 : 0 }}
     >
       {/* A plain dim, not a backdrop blur: blurring the whole app behind the
           drawer made every frame of the slide expensive on iOS. It is its own
           layer because the touch-device rules strip a hovered button's background. */}
-      <div className="fixed inset-0 bg-black/40" />
+      <div className="absolute inset-0 bg-black/40" />
       <button
         // Hidden on its own: the touch-device rule that forces
         // `pointer-events: auto` on every button would let it swallow taps
         // through the closed drawer.
-        className="fixed inset-0 transition-[visibility] duration-150"
+        className="absolute inset-0 transition-[visibility] duration-150"
         style={{ visibility: sidebarOpen ? 'visible' : 'hidden' }}
         onClick={handleBackdropClick}
         onTouchStart={handleBackdropTouch}
