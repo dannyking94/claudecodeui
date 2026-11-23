@@ -250,17 +250,25 @@ export function presentChatBridgeTurns(messages: NormalizedMessage[]): Normalize
         role: 'user',
         content,
       });
-      for (const line of wake.recovered) {
-        presented.push(userBubble(`${message.id}_chat_${line.messageId}`, formatInboundText(line.room, line)));
-      }
+      // Bubble ids are positional within the wake, never derived from what the
+      // bubble holds. A wake is first written alone — a "message from owner"
+      // placeholder — and its text arrives with the `read` a few seconds later.
+      // If that turned the row into a differently-keyed one, an open view's
+      // cached tail would stop matching the server's latest page anywhere, its
+      // incremental refresh would give up, and nothing the secretary wrote
+      // after that (its reply) would show until a reload.
+      const bubbles: string[] = wake.recovered.map((line) => formatInboundText(line.room, line));
       for (const [room, count] of wake.pending) {
         if (count > 0) {
-          presented.push(userBubble(`${message.id}_chat_pending_${room}`, formatFallbackText(room, count)));
+          bubbles.push(formatFallbackText(room, count));
         }
       }
-      if (wake.recovered.length === 0 && wake.pending.size === 0) {
-        presented.push(userBubble(`${message.id}_chat_wake`, formatFallbackText(null, 0)));
+      if (bubbles.length === 0) {
+        bubbles.push(formatFallbackText(null, 0));
       }
+      bubbles.forEach((content, index) => {
+        presented.push(userBubble(`${message.id}_chat_${index}`, content));
+      });
       // Anything typed alongside the notice in the same turn stays a user message.
       const remainder = (message.content ?? '').replace(CHAT_NOTICE_PATTERN, '').trim();
       if (remainder) {

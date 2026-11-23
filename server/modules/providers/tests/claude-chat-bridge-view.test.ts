@@ -95,7 +95,7 @@ test('a single wake becomes the owner bubble and the sent reply an assistant mes
   const presented = presentChatBridgeTurns(messages);
   // The bubble keeps the wake's time so an optimistic local echo reconciles with it.
   assert.equal(presented[0].timestamp, messages[0].timestamp);
-  assert.equal(presented[0].id, 'w1_chat_1001');
+  assert.equal(presented[0].id, 'w1_chat_0');
   // Hidden calls take their tool_result rows with them.
   assert.ok(!presented.some((message) => message.kind === 'tool_result'));
 });
@@ -183,6 +183,29 @@ test('a Discord wake shows the sender and room, and the reply is tagged with the
 test('a wake with no read yet shows a compact owner bubble, never the raw notice', () => {
   const messages = [wake('w1', [['local/owner', 1]]), ...toolCall('r', 'mcp__chat__read', { handle: 'local/owner' })];
   assert.deepEqual(view(messages), ['user 📬 Message from owner']);
+});
+
+test('a wake keeps its bubble ids when the read fills in their text', () => {
+  // An open view caches the placeholder, then refreshes once the read lands.
+  // Its incremental refresh stitches the new page onto its cache by row id, so
+  // a bubble that changed id would orphan the cache and the reply after it
+  // would never show without a reload (2026-11-23).
+  const ids = (messages: NormalizedMessage[]) => presentChatBridgeTurns(messages).map((message) => message.id);
+  const single = wake('w1', [['local/owner', 1]]);
+  const singleRead = toolCall('r1', 'mcp__chat__read', { handle: 'local/owner' }, `[local/owner]\n${ownerLine(1, '1001', 'hi')}`);
+  assert.deepEqual(ids([single]), ['w1_chat_0']);
+  assert.deepEqual(ids([single, ...singleRead]), ['w1_chat_0']);
+
+  const batched = wake('w2', [['local/owner', 2]]);
+  const partialRead = toolCall('r2', 'mcp__chat__read', { handle: 'local/owner' }, `[local/owner]\n${ownerLine(1, '2001', 'one')}`);
+  const fullRead = toolCall('r3', 'mcp__chat__read', { handle: 'local/owner' }, `[local/owner]\n${[
+    ownerLine(1, '2001', 'one'),
+    ownerLine(2, '2002', 'two'),
+  ].join('\n')}`);
+  assert.deepEqual(ids([batched]), ['w2_chat_0']);
+  assert.deepEqual(ids([batched, ...partialRead]), ['w2_chat_0', 'w2_chat_1']);
+  assert.deepEqual(ids([batched, ...partialRead, ...fullRead]), ['w2_chat_0', 'w2_chat_1']);
+  assert.deepEqual(view([batched, ...partialRead, ...fullRead]), ['user one', 'user two']);
 });
 
 test('a transcript without the chat bridge is returned as is', () => {
