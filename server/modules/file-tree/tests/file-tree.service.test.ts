@@ -334,6 +334,141 @@ test('listProjectFiles shares the entry limit across nested directories', async 
   );
 });
 
+test('listProjectDirectory lists one level and never opens a subdirectory', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const openedDirectories: string[] = [];
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    stat: async () => createStats(true, 0o755),
+    readTextFile: async () => '/tmp\n',
+    openDirectory: createDirectoryReader((directoryPath) => {
+      openedDirectories.push(directoryPath);
+      return [
+        createDirectoryEntry('tmp', true),
+        createDirectoryEntry('node_modules', true),
+        createDirectoryEntry('README.md', false),
+        createDirectoryEntry('docs', true),
+      ];
+    }),
+    lstat: async (candidatePath) => createStats(!candidatePath.endsWith('.md'), 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  const listing = await service.listProjectDirectory('project-1', { directoryPath: null, respectGitignore: true });
+
+  // Only the root is read: `docs` is listed without children, and the
+  // gitignored `tmp` (which may hold millions of entries) is neither shown nor opened.
+  assert.deepEqual(openedDirectories, [projectRoot]);
+  assert.equal(listing.path, projectRoot);
+  assert.equal(listing.truncated, false);
+  assert.deepEqual(listing.entries.map((entry) => [entry.name, entry.type, entry.children]), [
+    ['docs', 'directory', undefined],
+    ['README.md', 'file', undefined],
+  ]);
+});
+
+test('listProjectDirectory lists a nested directory and refuses one outside the project', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const docsDirectory = path.join(projectRoot, 'docs');
+  const openedDirectories: string[] = [];
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    stat: async () => createStats(true, 0o755),
+    openDirectory: createDirectoryReader((directoryPath) => {
+      openedDirectories.push(directoryPath);
+      return [createDirectoryEntry('guide.md', false)];
+    }),
+    lstat: async () => createStats(false, 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  const listing = await service.listProjectDirectory('project-1', { directoryPath: 'docs', respectGitignore: false });
+  assert.equal(listing.path, docsDirectory);
+  assert.deepEqual(listing.entries.map((entry) => entry.path), [path.join(docsDirectory, 'guide.md')]);
+
+  await assert.rejects(
+    service.listProjectDirectory('project-1', { directoryPath: '../elsewhere', respectGitignore: false }),
+    (error: unknown) => error instanceof AppError && error.code === 'PATH_OUTSIDE_PROJECT',
+  );
+  assert.deepEqual(openedDirectories, [docsDirectory]);
+});
+
+test('listProjectDirectory lists a system-directory project root but never descends into one', async () => {
+  // A project opened at /tmp is listed like the recursive walk lists it; a
+  // pseudo-filesystem below a broad root (/ here, with /proc in it) is not.
+  const openedDirectories: string[] = [];
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    stat: async () => createStats(true, 0o755),
+    openDirectory: createDirectoryReader((directoryPath) => {
+      openedDirectories.push(directoryPath);
+      return [createDirectoryEntry('proc', true)];
+    }),
+    lstat: async () => createStats(true, 0o755),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, '/'));
+
+  const root = await service.listProjectDirectory('project-1', { directoryPath: null, respectGitignore: false });
+  assert.deepEqual(root.entries.map((entry) => entry.name), ['proc']);
+  const proc = await service.listProjectDirectory('project-1', { directoryPath: '/proc', respectGitignore: false });
+  assert.deepEqual(proc.entries, []);
+  assert.deepEqual(openedDirectories, ['/']);
+});
+
+test('listProjectDirectory truncates a huge directory instead of reading all of it', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  let streamedEntries = 0;
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    stat: async () => createStats(true, 0o755),
+    // Endless on purpose, like a 6.6M-entry scratch directory: the listing has
+    // to stop reading by itself and still answer.
+    openDirectory: async function* () {
+      for (let index = 0; ; index += 1) {
+        streamedEntries += 1;
+        yield createDirectoryEntry(`file-${index}.txt`, false);
+      }
+    },
+    lstat: async () => createStats(false, 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  const listing = await service.listProjectDirectory('project-1', { directoryPath: null, respectGitignore: false });
+
+  assert.equal(listing.truncated, true);
+  assert.equal(listing.entries.length, 5_000);
+  assert.equal(streamedEntries, 5_001);
+});
+
+test('listProjectDirectory serves a project far larger than the recursive walk allows', async () => {
+  // 20 directories of 1,000 files each: the recursive listing refuses this
+  // with 413, the lazy listing answers each level.
+  const projectRoot = path.resolve('file-tree-test-project');
+  const isTopLevel = (directoryPath: string) => directoryPath === projectRoot;
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    stat: async () => createStats(true, 0o755),
+    openDirectory: createDirectoryReader((directoryPath) => (isTopLevel(directoryPath)
+      ? Array.from({ length: 20 }, (_, index) => createDirectoryEntry(`dir-${index}`, true))
+      : Array.from({ length: 1_000 }, (_, index) => createDirectoryEntry(`file-${index}.txt`, false)))),
+    lstat: async (candidatePath) => createStats(path.dirname(candidatePath) === projectRoot, 0o644),
+  });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
+
+  await assert.rejects(
+    service.listProjectFiles('project-1'),
+    (error: unknown) => error instanceof AppError && error.code === 'FILE_TREE_TOO_LARGE',
+  );
+  const root = await service.listProjectDirectory('project-1', { directoryPath: null, respectGitignore: false });
+  assert.equal(root.entries.length, 20);
+  const nested = await service.listProjectDirectory('project-1', {
+    directoryPath: root.entries[0].path,
+    respectGitignore: false,
+  });
+  assert.equal(nested.entries.length, 1_000);
+  assert.equal(nested.truncated, false);
+});
+
 test('readTextFile rejects traversal before invoking the filesystem adapter', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
   const readPaths: string[] = [];

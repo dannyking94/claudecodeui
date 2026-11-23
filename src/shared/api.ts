@@ -363,6 +363,13 @@ export const api = {
     put(`/api/file-tree/projects/${projectId}/file`, { filePath, content }),
   getFiles: (projectId: string, options: ApiRequestOptions = {}) =>
     get(`/api/file-tree/projects/${projectId}/files${query({ respectGitignore: true })}`, options),
+  // One directory level (the project root when `directoryPath` is null) for
+  // the File Tree tab, which reads each folder only when it is expanded.
+  getDirectoryListing: (projectId: string, directoryPath: string | null, options: ApiRequestOptions = {}) =>
+    get(
+      `/api/file-tree/projects/${projectId}/files/children${query({ path: directoryPath, respectGitignore: true })}`,
+      options,
+    ),
 
   // File operations
   createFile: (

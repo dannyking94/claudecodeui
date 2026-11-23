@@ -20,6 +20,7 @@ function createFakeServices(overrides: Partial<FileTreeServices> = {}): FileTree
     openFile: unexpectedOperation,
     saveTextFile: unexpectedOperation,
     listProjectFiles: unexpectedOperation,
+    listProjectDirectory: unexpectedOperation,
     createEntry: unexpectedOperation,
     renameEntry: unexpectedOperation,
     deleteEntry: unexpectedOperation,
@@ -93,6 +94,30 @@ test('project files route requests gitignore filtering when explicitly enabled',
   });
 
   assert.deepEqual(inputs, [['project-1', { respectGitignore: true }]]);
+});
+
+test('directory listing route forwards the requested directory and gitignore flag', async () => {
+  const inputs: Parameters<FileTreeServices['listProjectDirectory']>[] = [];
+  const services = createFakeServices({
+    listProjectDirectory: async (...input) => {
+      inputs.push(input);
+      return { path: '/project/src', entries: [], truncated: false };
+    },
+  });
+
+  await withFileTreeServer(services, async (baseUrl) => {
+    const rootResponse = await fetch(`${baseUrl}/api/file-tree/projects/project-1/files/children`);
+    assert.equal(rootResponse.status, 200);
+    const nestedResponse = await fetch(
+      `${baseUrl}/api/file-tree/projects/project-1/files/children?path=${encodeURIComponent('/project/src')}&respectGitignore=true`,
+    );
+    assert.deepEqual(await nestedResponse.json(), { path: '/project/src', entries: [], truncated: false });
+  });
+
+  assert.deepEqual(inputs, [
+    ['project-1', { directoryPath: null, respectGitignore: false }],
+    ['project-1', { directoryPath: '/project/src', respectGitignore: true }],
+  ]);
 });
 
 test('create route parses the transport payload before invoking the service', async () => {

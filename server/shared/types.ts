@@ -1565,6 +1565,22 @@ export type FileTreeNode = {
 };
 
 /**
+ * One directory level returned by the lazy File Tree listing.
+ *
+ * `entries` are the visible children of `path`, sorted directories first and
+ * without `children`: the browser asks for a directory's own level only when
+ * the user expands it, so opening the tree costs one directory read no matter
+ * how large the project is. `truncated` is true when the directory held more
+ * visible entries than the per-directory cap; the listing then holds the first
+ * entries read, not a sorted prefix of the whole directory.
+ */
+export type FileTreeDirectoryListing = {
+  path: string;
+  entries: FileTreeNode[];
+  truncated: boolean;
+};
+
+/**
  * Minimal directory-entry shape required during File Tree traversal.
  *
  * Production adapts Node `Dirent` objects to this structural contract. Tests
@@ -1708,6 +1724,10 @@ export type FileTreeServices = {
     projectId: string,
     options?: { respectGitignore: boolean },
   ): Promise<FileTreeNode[]>;
+  listProjectDirectory(
+    projectId: string,
+    options: { directoryPath: string | null; respectGitignore: boolean },
+  ): Promise<FileTreeDirectoryListing>;
   createEntry(input: {
     projectId: string;
     parentPath: string;

@@ -13,7 +13,7 @@ import { useFileTreeViewMode } from '@/modules/file-tree/hooks/useFileTreeViewMo
 import { useFileTreeUpload } from '@/modules/file-tree/hooks/useFileTreeUpload';
 import type { DirectoryRevealRequest, FileTreeImageSelection, FileTreeNode,Project } from '@/shared/types';
 import { formatFileSize, formatRelativeTime, isImageFile } from '@/modules/file-tree/utils/fileTreeUtils';
-import { directoryRevealPaths } from '@/modules/file-tree/utils/revealDirectory';
+import { directoryRevealProgress } from '@/modules/file-tree/utils/revealDirectory';
 import { ScrollArea, Input } from '@/shared/ui';
 import FileTreeBody from '@/modules/file-tree/FileTreeBody';
 import FileTreeDetailedColumns from '@/modules/file-tree/FileTreeDetailedColumns';
@@ -52,11 +52,22 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
     }
   }, [toast]);
 
-  const { files, loading, error, refreshFiles } = useFileTreeData(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
-  const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
+  // Held here because both hooks below read it: a search lists the whole
+  // project itself, so the tree stops reading expanded folders one by one.
+  const [searchQuery, setSearchQuery] = useState('');
+  const isSearching = searchQuery.trim().length > 0;
+  const { files, loading, error, refreshFiles, revision } = useFileTreeData(
+    selectedProject,
+    expandedDirs,
+    !isSearching,
+  );
+  const { filteredFiles } = useFileTreeSearch({
+    projectId: selectedProject?.projectId,
     files,
+    searchQuery,
+    revision,
     expandDirectories,
   });
 
@@ -65,20 +76,22 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
   const revealedRef = useRef<DirectoryRevealRequest | null>(null);
 
   // Expand every ancestor between the project root and the requested folder.
-  // A request that arrives before the tree finds nothing to expand and is
-  // retried when `files` lands.
+  // The tree is read one folder at a time, so this runs again each time a
+  // level arrives (`files` changes) and opens the next one, until the walk is
+  // settled; only then is the request marked as served.
   useEffect(() => {
     const projectRoot = selectedProject?.path || selectedProject?.fullPath;
-    if (!revealDirectory || !projectRoot || revealedRef.current === revealDirectory) {
+    if (!revealDirectory || !projectRoot || revealedRef.current === revealDirectory || files.length === 0) {
       return;
     }
-    const paths = directoryRevealPaths(files, projectRoot, revealDirectory.path);
-    if (paths.length === 0) {
-      return;
+    const { paths, settled } = directoryRevealProgress(files, projectRoot, revealDirectory.path);
+    if (settled) {
+      revealedRef.current = revealDirectory;
     }
-    revealedRef.current = revealDirectory;
-    expandDirectories(paths);
-  }, [revealDirectory, selectedProject?.path, selectedProject?.fullPath, expandDirectories, files]);
+    if (paths.length > 0 && paths.some((path) => !expandedDirs.has(path))) {
+      expandDirectories(paths);
+    }
+  }, [revealDirectory, selectedProject?.path, selectedProject?.fullPath, expandDirectories, expandedDirs, files]);
 
   // File operations
   const operations = useFileTreeOperations({

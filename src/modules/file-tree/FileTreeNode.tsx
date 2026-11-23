@@ -280,6 +280,17 @@ export default function FileTreeNode({
               operationLoading={operationLoading}
             />
           ))}
+          {item.truncated === true && (
+            // The server stops reading a huge directory at its per-directory cap.
+            <div
+              className="py-[3px] pr-2 text-xs italic text-muted-foreground"
+              style={{ paddingLeft: `${(level + 1) * 16 + 22}px` }}
+            >
+              {t('fileTree.directoryTruncated', 'Showing the first {{count}} entries of this folder', {
+                count: item.children?.length ?? 0,
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

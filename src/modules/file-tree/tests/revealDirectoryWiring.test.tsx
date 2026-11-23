@@ -14,18 +14,22 @@ import type { Project } from '@/shared/types';
 
 const ROOT = '/home/odoo/workspace/personal';
 
-const tree = [
-  {
-    type: 'directory',
-    name: 'decisions',
-    path: `${ROOT}/decisions`,
-    children: [{ type: 'file', name: '0001-first.md', path: `${ROOT}/decisions/0001-first.md` }],
-  },
-];
+// The tree is read one folder at a time, so the mock answers per directory.
+const listings: Record<string, unknown[]> = {
+  [ROOT]: [{ type: 'directory', name: 'decisions', path: `${ROOT}/decisions` }],
+  [`${ROOT}/decisions`]: [
+    { type: 'directory', name: 'archive', path: `${ROOT}/decisions/archive` },
+    { type: 'file', name: '0001-first.md', path: `${ROOT}/decisions/0001-first.md` },
+  ],
+  [`${ROOT}/decisions/archive`]: [{ type: 'file', name: '0000-old.md', path: `${ROOT}/decisions/archive/0000-old.md` }],
+};
 
 vi.mock('@/shared/api', () => ({
   api: {
-    getFiles: async () => ({ ok: true, json: async () => tree }),
+    getDirectoryListing: async (_projectId: string, directoryPath: string | null) => {
+      const path = directoryPath ?? ROOT;
+      return { ok: true, json: async () => ({ path, entries: listings[path] ?? [], truncated: false }) };
+    },
   },
 }));
 
@@ -46,4 +50,10 @@ test('a folder nobody asked for stays closed', async () => {
 
   await waitFor(() => assert.ok(screen.getByText('decisions')));
   assert.equal(screen.queryByText('0001-first.md'), null);
+});
+
+test('a nested reference opens each level as the folder above it is read', async () => {
+  render(<FileTree selectedProject={project} revealDirectory={{ path: 'decisions/archive/' }} />);
+
+  await waitFor(() => assert.ok(screen.getByText('0000-old.md')));
 });

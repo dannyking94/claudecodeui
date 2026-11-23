@@ -167,6 +167,15 @@ export function createFileTreeRouter(
     }));
   }, logger));
 
+  // One directory level, for the File Tree tab's expand-on-demand loading.
+  // `path` is optional; without it the project root is listed.
+  router.get('/projects/:projectId/files/children', createRouteHandler(async (request, response) => {
+    response.json(await services.listProjectDirectory(readProjectId(request), {
+      directoryPath: readOptionalString(request.query.path),
+      respectGitignore: request.query.respectGitignore === 'true',
+    }));
+  }, logger));
+
   router.post('/projects/:projectId/files/create', createRouteHandler(async (request, response) => {
     const body = readBody(request);
     if (!body.name || !body.type) {

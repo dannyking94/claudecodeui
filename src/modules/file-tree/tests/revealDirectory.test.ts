@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 
 import { test } from 'vitest';
 
-import { directoryRevealPaths } from '@/modules/file-tree/utils/revealDirectory';
+import { directoryRevealProgress } from '@/modules/file-tree/utils/revealDirectory';
 import type { FileTreeNode } from '@/shared/types';
+
+const directoryRevealPaths = (files: FileTreeNode[], projectPath: string, reference: string) =>
+  directoryRevealProgress(files, projectPath, reference).paths;
 
 /**
  * Regression guard: an in-chat directory reference is written the way the model
