@@ -363,6 +363,17 @@ export const api = {
     put(`/api/file-tree/projects/${projectId}/file`, { filePath, content }),
   getFiles: (projectId: string, options: ApiRequestOptions = {}) =>
     get(`/api/file-tree/projects/${projectId}/files${query({ respectGitignore: true })}`, options),
+  // Bounded filename search (`ProjectFileSearchResult`), for callers that need
+  // files from anywhere in the project without the full tree, which the
+  // server refuses for large projects. `searchQuery` is whitespace-separated
+  // tokens matched against the project-relative path.
+  searchFiles: (
+    projectId: string,
+    searchQuery: string,
+    limit: number,
+    options: ApiRequestOptions = {},
+  ) =>
+    get(`/api/file-tree/projects/${projectId}/files/search${query({ q: searchQuery, limit })}`, options),
   // One directory level (the project root when `directoryPath` is null) for
   // the File Tree tab, which reads each folder only when it is expanded.
   getDirectoryListing: (projectId: string, directoryPath: string | null, options: ApiRequestOptions = {}) =>

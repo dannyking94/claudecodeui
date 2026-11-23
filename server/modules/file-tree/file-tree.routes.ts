@@ -71,6 +71,14 @@ function readRequestedFileCount(value: unknown, fallbackCount: number): number {
   return Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : fallbackCount;
 }
 
+const DEFAULT_FILE_SEARCH_LIMIT = 50;
+
+// The service clamps the upper bound; anything unparsable uses the default.
+function readSearchLimit(value: unknown): number {
+  const parsedLimit = typeof value === 'string' ? Number.parseInt(value, 10) : Number.NaN;
+  return Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_FILE_SEARCH_LIMIT;
+}
+
 function normalizeUploadedFiles(request: UploadedRequest): FileTreeUploadedFile[] {
   return Array.isArray(request.files)
     ? request.files.map((file) => ({
@@ -173,6 +181,15 @@ export function createFileTreeRouter(
     response.json(await services.listProjectDirectory(readProjectId(request), {
       directoryPath: readOptionalString(request.query.path),
       respectGitignore: request.query.respectGitignore === 'true',
+    }));
+  }, logger));
+
+  // Bounded filename search for @-mentions, the command palette and the
+  // file-open resolver, which cannot use the eager tree on large projects.
+  router.get('/projects/:projectId/files/search', createRouteHandler(async (request, response) => {
+    response.json(await services.searchProjectFiles(readProjectId(request), {
+      query: readOptionalString(request.query.q) ?? '',
+      limit: readSearchLimit(request.query.limit),
     }));
   }, logger));
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import os from 'node:os';
@@ -6,7 +7,9 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
+import { gitWorkTreeFiles } from '@/modules/file-tree/file-tree.git-files.js';
 import { createFileTreeService } from '@/modules/file-tree/file-tree.service.js';
 import type {
   FileTreeDirectoryEntry,
@@ -14,6 +17,7 @@ import type {
   FileTreeServiceDependencies,
   FileTreeServices,
   FileTreeStats,
+  FileTreeVersionedFileLister,
 } from '@/shared/types.js';
 import { AppError, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/utils.js';
 
@@ -75,14 +79,25 @@ function createFakeFileSystem(
   };
 }
 
+// Behaves like a directory outside any git work tree: the listing fails
+// before yielding a path, so the search falls back to its directory walk.
+const notAGitWorkTree: FileTreeVersionedFileLister = {
+  // oxlint-disable-next-line require-yield
+  async *listFiles() {
+    throw new Error('fatal: not a git repository');
+  },
+};
+
 function createDependencies(
   fileSystem: FileTreeFileSystem,
   projectRoot: string,
   extraReadableRoots: readonly string[] = [],
   loggedErrors: string[] = [],
+  versionedFiles: FileTreeVersionedFileLister = notAGitWorkTree,
 ): FileTreeServiceDependencies {
   return {
     fileSystem,
+    versionedFiles,
     projects: {
       getProjectPathById: async () => projectRoot,
     },
@@ -469,6 +484,197 @@ test('listProjectDirectory serves a project far larger than the recursive walk a
   assert.equal(nested.truncated, false);
 });
 
+// The project shape the eager walk refuses with 413: 20 directories of 1,000
+// files each, outside any git work tree.
+function createOversizedProjectFileSystem(projectRoot: string, counters = { lstat: 0 }): FileTreeFileSystem {
+  return createFakeFileSystem({
+    access: async () => undefined,
+    readTextFile: async () => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    },
+    openDirectory: createDirectoryReader((directoryPath) => (directoryPath === projectRoot
+      ? Array.from({ length: 20 }, (_, index) => createDirectoryEntry(`dir-${index}`, true))
+      : Array.from({ length: 1_000 }, (_, index) => createDirectoryEntry(`file-${index}.txt`, false)))),
+    lstat: async (candidatePath) => {
+      counters.lstat += 1;
+      return createStats(path.dirname(candidatePath) === projectRoot, 0o644);
+    },
+  });
+}
+
+test('searchProjectFiles walks a non-git project the eager walk refuses, without a stat per file', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const eagerService = createFileTreeService(createDependencies(createOversizedProjectFileSystem(projectRoot), projectRoot));
+  await assert.rejects(
+    eagerService.listProjectFiles('project-1'),
+    (error: unknown) => error instanceof AppError && error.code === 'FILE_TREE_TOO_LARGE',
+  );
+
+  // A separate instance, so stats still in flight from the rejected walk are not counted.
+  const counters = { lstat: 0 };
+  const service = createFileTreeService(createDependencies(createOversizedProjectFileSystem(projectRoot, counters), projectRoot));
+  const result = await service.searchProjectFiles('project-1', { query: 'file-999.txt', limit: 50 });
+  assert.equal(result.source, 'walk');
+  assert.equal(result.truncated, false);
+  assert.equal(result.files.length, 20);
+  assert.ok(result.files.every((file) => file.name === 'file-999.txt'));
+  assert.deepEqual(result.files[0], {
+    name: 'file-999.txt',
+    path: path.join(projectRoot, 'dir-0', 'file-999.txt'),
+    relativePath: 'dir-0/file-999.txt',
+  });
+  assert.equal(counters.lstat, 0);
+});
+
+test('searchProjectFiles uses the git listing, ranks basename matches first and hides hard-excluded directories', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  const listedPaths = [
+    ...Array.from({ length: 30_000 }, (_, index) => `docs/review/page-${index}.md`),
+    'src/components/button-group.tsx',
+    'src/button.tsx',
+    'test/fixtures/button/readme.md',
+    'node_modules/button/index.js',
+  ];
+  const listedDirectories: string[] = [];
+  const versionedFiles: FileTreeVersionedFileLister = {
+    async *listFiles(directoryPath) {
+      listedDirectories.push(directoryPath);
+      yield* listedPaths;
+    },
+  };
+  // Any filesystem read other than the project-root check would throw here.
+  const fileSystem = createFakeFileSystem({ access: async () => undefined });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [], [], versionedFiles));
+
+  const result = await service.searchProjectFiles('project-1', { query: 'button', limit: 10 });
+  assert.deepEqual(listedDirectories, [projectRoot]);
+  assert.equal(result.source, 'git');
+  assert.equal(result.truncated, false);
+  assert.deepEqual(result.files.map((file) => file.relativePath), [
+    'src/button.tsx',
+    'src/components/button-group.tsx',
+    'test/fixtures/button/readme.md',
+  ]);
+  assert.equal(result.files[0].path, path.join(projectRoot, 'src', 'button.tsx'));
+
+  const multiToken = await service.searchProjectFiles('project-1', { query: 'review 2999', limit: 5 });
+  assert.equal(multiToken.files[0].relativePath, 'docs/review/page-2999.md');
+  assert.equal(multiToken.truncated, true);
+  assert.equal(multiToken.files.length, 5);
+});
+
+test('searchProjectFiles with an empty query stops git as soon as it has enough files', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  let yieldedPaths = 0;
+  let observedSignal: AbortSignal | null = null;
+  const versionedFiles: FileTreeVersionedFileLister = {
+    async *listFiles(_directoryPath, signal) {
+      observedSignal = signal;
+      for (let index = 0; index < 1_000_000; index += 1) {
+        yieldedPaths += 1;
+        yield `file-${index}.txt`;
+      }
+    },
+  };
+  const fileSystem = createFakeFileSystem({ access: async () => undefined });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [], [], versionedFiles));
+
+  const result = await service.searchProjectFiles('project-1', { query: '  ', limit: 10 });
+  assert.equal(result.files.length, 10);
+  assert.equal(result.truncated, true);
+  assert.equal(yieldedPaths, 11);
+  assert.equal((observedSignal as AbortSignal | null)?.aborted, true);
+});
+
+test('searchProjectFiles stops at its scan budget instead of failing', async () => {
+  const projectRoot = path.resolve('file-tree-test-project');
+  let yieldedPaths = 0;
+  const versionedFiles: FileTreeVersionedFileLister = {
+    async *listFiles() {
+      for (let index = 0; index < 1_000_000; index += 1) {
+        yieldedPaths += 1;
+        yield `dir/file-${index}.txt`;
+      }
+    },
+  };
+  const fileSystem = createFakeFileSystem({ access: async () => undefined });
+  const service = createFileTreeService(createDependencies(fileSystem, projectRoot, [], [], versionedFiles));
+
+  const result = await service.searchProjectFiles('project-1', { query: 'nothing-matches-this', limit: 10 });
+  assert.deepEqual(result.files, []);
+  assert.equal(result.truncated, true);
+  assert.ok(yieldedPaths <= 200_001, `read ${yieldedPaths} paths`);
+});
+
+const runGit = promisify(execFile);
+
+test('searchProjectFiles on a real git work tree over the eager limit honours nested .gitignore files', async (t) => {
+  try {
+    await runGit('git', ['--version']);
+  } catch {
+    t.skip('git is not installed');
+    return;
+  }
+
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-search-'));
+  try {
+    await runGit('git', ['init', '--quiet'], { cwd: projectRoot });
+    await fsPromises.mkdir(path.join(projectRoot, 'docs', 'review'), { recursive: true });
+    await fsPromises.mkdir(path.join(projectRoot, 'src', 'generated'), { recursive: true });
+    await Promise.all(Array.from({ length: 10_050 }, (_, index) => fsPromises.writeFile(
+      path.join(projectRoot, 'docs', 'review', `page-${index}.md`),
+      '',
+    )));
+    await fsPromises.writeFile(path.join(projectRoot, 'src', 'main.ts'), '');
+    await fsPromises.writeFile(path.join(projectRoot, 'src', 'generated', 'main.gen.ts'), '');
+    await fsPromises.writeFile(path.join(projectRoot, 'src', '.gitignore'), 'generated/\n');
+    await fsPromises.writeFile(path.join(projectRoot, 'README.md'), '');
+    await runGit('git', ['add', 'README.md'], { cwd: projectRoot });
+
+    const service = createRealFileSystemService(projectRoot);
+    await assert.rejects(
+      service.listProjectFiles('project-1', { respectGitignore: true }),
+      (error: unknown) => error instanceof AppError && error.code === 'FILE_TREE_TOO_LARGE',
+    );
+
+    const mainFiles = await service.searchProjectFiles('project-1', { query: 'main', limit: 50 });
+    assert.equal(mainFiles.source, 'git');
+    assert.deepEqual(mainFiles.files, [{
+      name: 'main.ts',
+      path: path.join(projectRoot, 'src', 'main.ts'),
+      relativePath: 'src/main.ts',
+    }]);
+
+    const deepFile = await service.searchProjectFiles('project-1', { query: 'page-10049', limit: 50 });
+    assert.deepEqual(deepFile.files.map((file) => file.relativePath), ['docs/review/page-10049.md']);
+
+    const tracked = await service.searchProjectFiles('project-1', { query: 'readme', limit: 50 });
+    assert.deepEqual(tracked.files.map((file) => file.relativePath), ['README.md']);
+  } finally {
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('searchProjectFiles falls back to a walk with the root .gitignore outside a git work tree', async () => {
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-search-walk-'));
+  try {
+    await fsPromises.mkdir(path.join(projectRoot, 'src'), { recursive: true });
+    await fsPromises.mkdir(path.join(projectRoot, 'out'), { recursive: true });
+    await fsPromises.mkdir(path.join(projectRoot, 'node_modules', 'pkg'), { recursive: true });
+    await fsPromises.writeFile(path.join(projectRoot, 'src', 'main.ts'), '');
+    await fsPromises.writeFile(path.join(projectRoot, 'out', 'main.js'), '');
+    await fsPromises.writeFile(path.join(projectRoot, 'node_modules', 'pkg', 'main.js'), '');
+    await fsPromises.writeFile(path.join(projectRoot, '.gitignore'), 'out/\n');
+
+    const service = createRealFileSystemService(projectRoot);
+    const result = await service.searchProjectFiles('project-1', { query: 'main', limit: 50 });
+    assert.equal(result.source, 'walk');
+    assert.deepEqual(result.files.map((file) => file.relativePath), ['src/main.ts']);
+  } finally {
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('readTextFile rejects traversal before invoking the filesystem adapter', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
   const readPaths: string[] = [];
@@ -594,6 +800,7 @@ function createRealFileSystemService(
       resolveReadOnlyRootPath: (candidatePath) => resolveReadOnlyRootPath(candidatePath),
     },
     resolveMimeType: () => 'text/plain',
+    versionedFiles: gitWorkTreeFiles,
     fileSystemConcurrency: 4,
     extraReadableRoots,
     logger: { error: () => undefined },

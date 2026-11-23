@@ -1084,6 +1084,20 @@ export type FileTreeImageSelection = {
 };
 
 
+/** One file from the server's project filename search (`api.searchFiles`): `path` is absolute and opens in the editor as-is, `relativePath` is `/`-separated from the project root. Used by the chat `@` mentions, the command palette and the file-open resolver instead of flattening the whole tree. */
+export type ProjectFileSearchMatch = {
+  name: string;
+  path: string;
+  relativePath: string;
+};
+
+/** Response body of `api.searchFiles`: at most the requested number of files, best match first; `truncated` means more files matched, or the server stopped scanning a very large project early. */
+export type ProjectFileSearchResult = {
+  files: ProjectFileSearchMatch[];
+  truncated: boolean;
+  source: 'git' | 'walk';
+};
+
 /** Whether a file tree entry is a file or a directory; use it instead of repeating the string union wherever `FileTreeNode`-shaped data is handled. */
 type FileTreeItemType = 'file' | 'directory';
 

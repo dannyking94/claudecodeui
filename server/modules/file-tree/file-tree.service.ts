@@ -5,6 +5,8 @@ import ignore from 'ignore';
 import type {
   FileTreeDirectoryEntry,
   FileTreeDirectoryListing,
+  FileTreeFileSearchMatch,
+  FileTreeFileSearchResult,
   FileTreeNode,
   FileTreeServiceDependencies,
   FileTreeServices,
@@ -51,6 +53,51 @@ const MAXIMUM_FILE_TREE_ENTRIES = 10_000;
 const MAXIMUM_DIRECTORY_LISTING_ENTRIES = 5_000;
 
 type FileTreeEntryFilter = (entryPath: string, isDirectory: boolean) => boolean;
+
+// Bounds for the filename search behind @-mentions, the command palette and
+// the file-open resolver. A search reads at most this many file paths (git
+// output or walked entries) and gives up after this long, then answers with
+// what it has and `truncated: true` rather than failing like the eager tree.
+const MAXIMUM_FILE_SEARCH_SCANNED_PATHS = 200_000;
+const MAXIMUM_FILE_SEARCH_DURATION_MS = 5_000;
+const MAXIMUM_FILE_SEARCH_RESULTS = 1_000;
+
+/**
+ * Scores a project-relative path against a search query, lower is better, or
+ * returns null when it does not match.
+ *
+ * Every whitespace-separated token must occur in the path (case-insensitive).
+ * An exact basename beats a basename prefix, which beats a basename that
+ * contains the last token, which beats a match only in the directories. An
+ * empty query matches everything equally.
+ */
+function createFileSearchScorer(query: string): (relativePath: string) => number | null {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return () => 0;
+  }
+  const wholeQuery = tokens.join(' ');
+  const lastToken = tokens[tokens.length - 1];
+
+  return (relativePath) => {
+    const lowerPath = relativePath.toLowerCase();
+    if (!tokens.every((token) => lowerPath.includes(token))) {
+      return null;
+    }
+    const lowerName = lowerPath.slice(lowerPath.lastIndexOf('/') + 1);
+    if (lowerName === wholeQuery || lowerPath === wholeQuery) return 0;
+    if (lowerName.startsWith(tokens[0])) return 1;
+    if (lowerName.includes(lastToken)) return 2;
+    return 3;
+  };
+}
+
+// git never lists `.git`, but a committed or untracked `node_modules` would be
+// listed (a symlinked one as a single path); the tree hides those directories
+// unconditionally, so the search does too.
+function isUnderHardExcludedDirectory(relativePath: string): boolean {
+  return relativePath.split('/').some((segment) => HARD_EXCLUDED_DIRECTORY_NAMES.has(segment));
+}
 
 function includeEntryByHardExclusions(entryPath: string, isDirectory: boolean): boolean {
   return !isDirectory || !HARD_EXCLUDED_DIRECTORY_NAMES.has(path.basename(entryPath));
@@ -628,6 +675,132 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
       const nodes = await Promise.all(entries.map((entry) => describeEntry(directoryPath, entry)));
       const listing: FileTreeDirectoryListing = { path: directoryPath, entries: sortFileTreeNodes(nodes), truncated };
       return listing;
+    },
+
+    // Filename search for callers that used to flatten the whole tree. Git
+    // work trees are enumerated by `git ls-files` (nested .gitignore files
+    // respected, no stat per file); anything else by a filtered walk. Both
+    // stop at a path and time budget instead of refusing large projects.
+    async searchProjectFiles(projectId, options) {
+      const projectRoot = path.resolve(await resolveAccessibleProjectRoot(projectId));
+      const limit = Math.min(Math.max(1, Math.floor(options.limit) || 1), MAXIMUM_FILE_SEARCH_RESULTS);
+      const scoreRelativePath = createFileSearchScorer(options.query);
+      const rankByScore = options.query.trim().length > 0;
+      const deadline = Date.now() + MAXIMUM_FILE_SEARCH_DURATION_MS;
+
+      const matches: Array<FileTreeFileSearchMatch & { score: number }> = [];
+      let scannedPaths = 0;
+      let scanIncomplete = false;
+
+      // Returns false once nothing more needs to be read: the scan budget is
+      // spent, or (for an empty query, which is not ranked) enough files are in.
+      const considerPath = (relativePath: string): boolean => {
+        scannedPaths += 1;
+        if (scannedPaths > MAXIMUM_FILE_SEARCH_SCANNED_PATHS || Date.now() > deadline) {
+          scanIncomplete = true;
+          return false;
+        }
+        const score = scoreRelativePath(relativePath);
+        if (score === null) {
+          return true;
+        }
+        const name = relativePath.slice(relativePath.lastIndexOf('/') + 1);
+        matches.push({
+          name,
+          path: path.join(projectRoot, ...relativePath.split('/')),
+          relativePath,
+          score,
+        });
+        // One extra match tells the caller there are more than it was given.
+        return rankByScore || matches.length <= limit;
+      };
+
+      let source: FileTreeFileSearchResult['source'] = 'git';
+      const gitController = new AbortController();
+      const gitTimer = setTimeout(() => gitController.abort(), MAXIMUM_FILE_SEARCH_DURATION_MS);
+      let gitListedAnything = false;
+      try {
+        for await (const relativePath of dependencies.versionedFiles.listFiles(projectRoot, gitController.signal)) {
+          gitListedAnything = true;
+          if (isUnderHardExcludedDirectory(relativePath)) {
+            continue;
+          }
+          if (!considerPath(relativePath)) {
+            break;
+          }
+        }
+      } catch (error) {
+        if (gitListedAnything) {
+          // A listing cut short (the time budget, or git dying mid-stream)
+          // still answers with what was read.
+          scanIncomplete = true;
+          if (!gitController.signal.aborted) {
+            dependencies.logger.error(`git ls-files stopped early in "${projectRoot}"`, error);
+          }
+        }
+      } finally {
+        clearTimeout(gitTimer);
+        // Stops git when the loop ended early.
+        gitController.abort();
+      }
+
+      // Not a git work tree (or git is unavailable, or the project is ignored
+      // by an enclosing repository): walk the directories instead, with the
+      // same visibility rules as the tree and no per-file stat.
+      if (!gitListedAnything) {
+        source = 'walk';
+        const includeEntry = await resolveProjectEntryFilter(projectRoot, true);
+        const remainingEntries = { value: MAXIMUM_FILE_SEARCH_SCANNED_PATHS };
+        let pendingDirectories = [projectRoot];
+        let keepScanning = true;
+        while (pendingDirectories.length > 0 && keepScanning) {
+          const levelListings = await Promise.all(pendingDirectories.map(async (directoryPath) => ({
+            directoryPath,
+            ...(await collectVisibleEntries(directoryPath, includeEntry, remainingEntries, 'truncate')),
+          })));
+          pendingDirectories = [];
+          for (const listing of levelListings) {
+            if (listing.truncated) {
+              scanIncomplete = true;
+            }
+            for (const entry of listing.entries) {
+              const entryPath = path.join(listing.directoryPath, entry.name);
+              if (entry.isDirectory()) {
+                if (!FORBIDDEN_WORKSPACE_PATHS.includes(normalizeProjectPath(entryPath))) {
+                  pendingDirectories.push(entryPath);
+                }
+                continue;
+              }
+              if (keepScanning) {
+                keepScanning = considerPath(path.relative(projectRoot, entryPath).split(path.sep).join('/'));
+              }
+            }
+          }
+          if (Date.now() > deadline) {
+            scanIncomplete = pendingDirectories.length > 0 || scanIncomplete;
+            break;
+          }
+        }
+        if (keepScanning && remainingEntries.value <= 0) {
+          scanIncomplete = true;
+        }
+      }
+
+      if (rankByScore) {
+        matches.sort((left, right) => left.score - right.score
+          || left.relativePath.length - right.relativePath.length
+          || left.relativePath.localeCompare(right.relativePath));
+      }
+      const result: FileTreeFileSearchResult = {
+        files: matches.slice(0, limit).map(({ name, path: filePath, relativePath }) => ({
+          name,
+          path: filePath,
+          relativePath,
+        })),
+        truncated: scanIncomplete || matches.length > limit,
+        source,
+      };
+      return result;
     },
 
     async createEntry(input) {

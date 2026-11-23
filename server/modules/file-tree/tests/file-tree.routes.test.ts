@@ -21,6 +21,7 @@ function createFakeServices(overrides: Partial<FileTreeServices> = {}): FileTree
     saveTextFile: unexpectedOperation,
     listProjectFiles: unexpectedOperation,
     listProjectDirectory: unexpectedOperation,
+    searchProjectFiles: unexpectedOperation,
     createEntry: unexpectedOperation,
     renameEntry: unexpectedOperation,
     deleteEntry: unexpectedOperation,
@@ -117,6 +118,37 @@ test('directory listing route forwards the requested directory and gitignore fla
   assert.deepEqual(inputs, [
     ['project-1', { directoryPath: null, respectGitignore: false }],
     ['project-1', { directoryPath: '/project/src', respectGitignore: true }],
+  ]);
+});
+
+test('file search route forwards the query and a parsed limit, defaulting both', async () => {
+  const inputs: Parameters<FileTreeServices['searchProjectFiles']>[] = [];
+  const result = {
+    files: [{ name: 'main.ts', path: '/project/src/main.ts', relativePath: 'src/main.ts' }],
+    truncated: false,
+    source: 'git' as const,
+  };
+  const services = createFakeServices({
+    searchProjectFiles: async (...input) => {
+      inputs.push(input);
+      return result;
+    },
+  });
+
+  await withFileTreeServer(services, async (baseUrl) => {
+    const response = await fetch(
+      `${baseUrl}/api/file-tree/projects/project-1/files/search?q=${encodeURIComponent('src main')}&limit=20`,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), result);
+
+    const defaults = await fetch(`${baseUrl}/api/file-tree/projects/project-1/files/search?limit=oops`);
+    assert.equal(defaults.status, 200);
+  });
+
+  assert.deepEqual(inputs, [
+    ['project-1', { query: 'src main', limit: 20 }],
+    ['project-1', { query: '', limit: 50 }],
   ]);
 });
 

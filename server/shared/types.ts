@@ -1581,6 +1581,36 @@ export type FileTreeDirectoryListing = {
 };
 
 /**
+ * One file returned by the project filename search.
+ *
+ * `path` is absolute, the same identifier `FileTreeNode.path` carries, so the
+ * editor and file-operation requests accept it unchanged. `relativePath` is
+ * relative to the project root with `/` separators, which is what the chat
+ * composer inserts for an `@` mention and what the query is matched against.
+ */
+export type FileTreeFileSearchMatch = {
+  name: string;
+  path: string;
+  relativePath: string;
+};
+
+/**
+ * Result of a bounded project filename search.
+ *
+ * `files` holds at most the requested limit, best match first. `truncated` is
+ * true when more files matched than were returned, or when the scan stopped at
+ * its file or time budget before reading the whole project, so callers know the
+ * list may be incomplete. `source` names how the project was enumerated: `git`
+ * (tracked plus untracked, non-ignored files) or `walk` (a filtered directory
+ * walk, for a project that is not a git work tree).
+ */
+export type FileTreeFileSearchResult = {
+  files: FileTreeFileSearchMatch[];
+  truncated: boolean;
+  source: 'git' | 'walk';
+};
+
+/**
  * Minimal directory-entry shape required during File Tree traversal.
  *
  * Production adapts Node `Dirent` objects to this structural contract. Tests
@@ -1629,6 +1659,21 @@ export type FileTreeFileSystem = {
   unlink(filePath: string): Promise<void>;
   copyFile(sourcePath: string, destinationPath: string): Promise<void>;
   createReadStream(filePath: string): Readable;
+};
+
+/**
+ * Version-control file enumeration injected into the File Tree search.
+ *
+ * `listFiles` yields every file git considers part of the work tree rooted at
+ * `directoryPath` — tracked files plus untracked files that no `.gitignore`
+ * (nested ones included) excludes — as `/`-separated paths relative to that
+ * directory, streamed as git prints them. Aborting `signal` must stop the
+ * underlying process. When `directoryPath` is not inside a git work tree the
+ * iterable throws before yielding anything, and the search falls back to a
+ * directory walk. Production runs `git ls-files`; tests supply arrays.
+ */
+export type FileTreeVersionedFileLister = {
+  listFiles(directoryPath: string, signal: AbortSignal): AsyncIterable<string>;
 };
 
 /**
@@ -1695,6 +1740,7 @@ export type FileTreeServiceDependencies = {
   projects: FileTreeProjectGateway;
   workspace: FileTreeWorkspaceGateway;
   resolveMimeType(filePath: string): string;
+  versionedFiles: FileTreeVersionedFileLister;
   fileSystemConcurrency: number;
   extraReadableRoots: readonly string[];
   logger: FileTreeLogger;
@@ -1728,6 +1774,10 @@ export type FileTreeServices = {
     projectId: string,
     options: { directoryPath: string | null; respectGitignore: boolean },
   ): Promise<FileTreeDirectoryListing>;
+  searchProjectFiles(
+    projectId: string,
+    options: { query: string; limit: number },
+  ): Promise<FileTreeFileSearchResult>;
   createEntry(input: {
     projectId: string;
     parentPath: string;

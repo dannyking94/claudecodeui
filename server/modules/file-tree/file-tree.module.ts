@@ -7,6 +7,7 @@ import mime from 'mime-types';
 import multer from 'multer';
 
 import { projectsDb } from '@/modules/database/index.js';
+import { gitWorkTreeFiles } from '@/modules/file-tree/file-tree.git-files.js';
 import { createFileTreeRouter } from '@/modules/file-tree/file-tree.routes.js';
 import { createFileTreeService } from '@/modules/file-tree/file-tree.service.js';
 import type {
@@ -90,6 +91,7 @@ const fileTreeServices = createFileTreeService({
   projects: fileTreeProjects,
   workspace: fileTreeWorkspace,
   resolveMimeType: (filePath) => mime.lookup(filePath) || 'application/octet-stream',
+  versionedFiles: gitWorkTreeFiles,
   fileSystemConcurrency: readFileSystemConcurrency(),
   extraReadableRoots: readExtraReadableRoots(),
   logger: fileTreeLogger,

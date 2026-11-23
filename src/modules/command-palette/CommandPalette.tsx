@@ -100,7 +100,7 @@ function CommandPalette({
 
   const sessions = useSessionsSource(projectId, open && showSessions);
   const messageMatches = useSessionMessageSearch(projectId, search, open && showSessions);
-  const files = useFilesSource(projectId, open && showFiles);
+  const files = useFilesSource(projectId, open && showFiles, search);
   const commits = useCommitsSource(projectId, open && showCommits);
   const branches = useBranchesSource(projectId, open && showBranches);
   const git = useGitActions(projectId);
