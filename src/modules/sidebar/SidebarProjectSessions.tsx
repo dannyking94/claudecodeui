@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { CheckSquare, ChevronDown, ChevronRight, ChevronUp, Plus, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -10,6 +10,7 @@ import { useCompactSidebar } from '@/modules/sidebar/hooks/useCompactSidebar';
 import { buildProjectSessionTree } from '@/modules/sidebar/utils/projectSessionTree';
 import {
   VISIBLE_SESSION_LIMIT,
+  cutTopLevelRows,
   foldChildSessions,
   isSpawnNestingEnabled,
   orderRootsByOwnActivity,
@@ -86,39 +87,25 @@ const relinkVisibleRows = (rows: ProjectSessionTreeRow[]): ProjectSessionTreeRow
 };
 
 /**
- * Dots on the project's "Show N more" toggle, standing in for the sessions it
- * is holding: red for a worker that died or stalled, amber for unread
- * activity, green for anything live. Only this
- * fold needs them — it cuts by top-level conversation, so a live root can in
- * principle fall past the cut. The arrows on parent rows cannot: a live child
- * is never one they fold.
+ * The dot on the project's "Show N more" toggle, standing in for the sessions
+ * it is holding: amber for unread activity. It needs no green or red dot: a
+ * conversation with anything live or alerting in it is never one this fold
+ * takes (see `cutTopLevelRows`), and the arrows on parent rows never fold a
+ * live child either.
  */
 function FoldedSessionIndicators({
-  foldedAlertCount,
-  foldedLiveCount,
   foldedUnreadCount,
   t,
 }: {
-  foldedAlertCount: number;
-  foldedLiveCount: number;
   foldedUnreadCount: number;
   t: TFunction;
 }) {
-  const alertLabel = t('tooltips.workerAlertIndicator', { defaultValue: 'A worker died or stalled' });
+  if (foldedUnreadCount === 0) {
+    return null;
+  }
   const unreadLabel = t('tooltips.unreadActivityIndicator', { defaultValue: 'New activity since you last opened it' });
-  const liveLabel = t('tooltips.liveSessionIndicator', { defaultValue: 'Live: a turn is running or its process is open' });
   return (
-    <>
-      {foldedAlertCount > 0 && (
-        <span role="status" title={alertLabel} aria-label={alertLabel} className="h-1.5 w-1.5 rounded-full bg-red-500" />
-      )}
-      {foldedUnreadCount > 0 && (
-        <span role="status" title={unreadLabel} aria-label={unreadLabel} className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-      )}
-      {foldedLiveCount > 0 && (
-        <span role="status" title={liveLabel} aria-label={liveLabel} className="h-1.5 w-1.5 rounded-full bg-green-500" />
-      )}
-    </>
+    <span role="status" title={unreadLabel} aria-label={unreadLabel} className="h-1.5 w-1.5 rounded-full bg-amber-500" />
   );
 }
 
@@ -194,16 +181,19 @@ export default function SidebarProjectSessions({
   const workerAlertSessionIds = useWorkerAlertSessionIds(workerStates, selectedSessionId);
   const [expandedParentIds, setExpandedParentIds] = useState<ReadonlySet<string>>(readExpandedParentSessionIds);
   const [isShowingAllSessions, setIsShowingAllSessions] = useState(false);
-  const toggleFoldedChildren = (parentSessionId: string) => {
-    const isExpanding = !expandedParentIds.has(parentSessionId);
-    writeExpandedParentSessionId(parentSessionId, isExpanding);
+  // Stable, so the memoized rows can take it as their "+N inactive" click.
+  // The storage write is idempotent for a given `previous`, so StrictMode's
+  // double call of the updater is harmless.
+  const toggleFoldedChildren = useCallback((parentSessionId: string) => {
     setExpandedParentIds((previous) => {
+      const isExpanding = !previous.has(parentSessionId);
+      writeExpandedParentSessionId(parentSessionId, isExpanding);
       const next = new Set(previous);
       if (isExpanding) next.add(parentSessionId);
       else next.delete(parentSessionId);
       return next;
     });
-  };
+  }, []);
   // Live = something actually running: a turn in flight, background work, or
   // a Claude CLI process alive at its prompt. Not "written to recently", and
   // not the unread (amber) flag, which stays set on a stopped worker until
@@ -223,7 +213,8 @@ export default function SidebarProjectSessions({
     const isFoldableChild = (session: SessionWithProvider) => spawnedSessionIds.has(session.id);
     // Roots are ranked by what stays visible, so one whose recent activity is
     // all in folded, stopped workers falls past the cut like any old session.
-    // An alerting worker stays drawn like a live one, so it ranks its root the same way.
+    // An alerting worker stays drawn like a live one, so it ranks its root the
+    // same way — and, below, exempts its conversation from the project cut.
     const drawnSessionIds = workerAlertSessionIds.size === 0
       ? liveSessionIds
       : new Set([...liveSessionIds, ...workerAlertSessionIds]);
@@ -253,41 +244,35 @@ export default function SidebarProjectSessions({
     );
     const rows = orderedRows.filter((row) => childFoldBySessionId.has(row.session.id));
 
-    // The project-level fold: the first few top-level conversations, each
-    // counted together with its whole subtree so the cut never lands between a
-    // parent and the children indented under it.
-    let cutIndex = rows.length;
-    let topLevelCount = 0;
-    for (let index = 0; index < rows.length; index += 1) {
-      if (rows[index].depth > 0) continue;
-      topLevelCount += 1;
-      if (topLevelCount > VISIBLE_SESSION_LIMIT) {
-        cutIndex = index;
-        break;
-      }
-    }
-    const isFoldable = cutIndex < rows.length;
+    // The project-level fold: a few top-level conversations, each counted
+    // with its whole subtree. One with anything live (or an unseen dead or
+    // stalled worker) in it is exempt and takes no slot, so a live session is
+    // never folded away however many conversations the project has.
+    const cut = cutTopLevelRows(rows, { limit: VISIBLE_SESSION_LIMIT, keptSessionIds: drawnSessionIds });
+    const isFoldable = cut.hidden.length > 0;
     const isFolded = isFoldable && !isShowingAllSessions;
     // A selection past the cut would otherwise disappear the moment it is
     // opened, so it stays pinned below the visible rows — flat, since apart
     // from its subtree an indent would read as a child of whatever row the
     // fold happened to end on.
-    const selectedIndex = selectedSessionId ? rows.findIndex((row) => row.session.id === selectedSessionId) : -1;
-    const isSelectedPastCut = isFolded && selectedIndex >= cutIndex;
+    const selectedPastCut = isFolded && selectedSessionId
+      ? cut.hidden.find((row) => row.session.id === selectedSessionId) ?? null
+      : null;
     const cappedRows: ProjectSessionTreeRow[] = !isFolded
       ? rows
-      : isSelectedPastCut
-        ? [...rows.slice(0, cutIndex), { ...rows[selectedIndex], parentId: null, link: null, depth: 0 }]
-        : rows.slice(0, cutIndex);
-    if (isSelectedPastCut) {
+      : selectedPastCut
+        ? [...cut.visible, { ...selectedPastCut, parentId: null, link: null, depth: 0 }]
+        : cut.visible;
+    if (selectedPastCut) {
       // Its children stay past the cut, so it offers no arrow to show them.
-      childFoldBySessionId.set(rows[selectedIndex].session.id, null);
+      childFoldBySessionId.set(selectedPastCut.session.id, null);
     }
 
     // Everything the user cannot currently see under this project, counted
     // once: the rows this fold took off screen, plus the children each arrow
-    // down there is holding.
-    const rowsPastCut = isFolded ? rows.slice(cutIndex) : [];
+    // down there is holding. Nothing live is among them, so the toggle only
+    // carries the unread dot.
+    const rowsPastCut = isFolded ? cut.hidden : [];
     const hiddenRows = rowsPastCut.filter((row) => row.session.id !== selectedSessionId);
 
     return {
@@ -299,8 +284,6 @@ export default function SidebarProjectSessions({
         (total, row) => total + (childFoldBySessionId.get(row.session.id)?.foldedCount ?? 0),
         0,
       ),
-      foldedAlertCount: hiddenRows.filter((row) => workerAlertSessionIds.has(row.session.id)).length,
-      foldedLiveCount: hiddenRows.filter((row) => liveSessionIds.has(row.session.id)).length,
       foldedUnreadCount: hiddenRows.filter((row) => attentionSessionIds.has(row.session.id)).length,
     };
   }, [
@@ -548,7 +531,14 @@ export default function SidebarProjectSessions({
                   hasChildren || childFold ? (
                     <button
                       type="button"
-                      className="relative flex w-3 flex-shrink-0 items-center justify-center rounded text-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      // Drawn 12px wide, the width of one indent, but an
+                      // invisible ::before widens what a click lands on to 28px
+                      // (44px on a phone) over the row's full height. Lifted
+                      // above the row it overlaps; the status dot stays on top.
+                      className={cn(
+                        "relative z-[1] flex w-3 flex-shrink-0 items-center justify-center rounded text-foreground/70 before:absolute before:inset-y-0 before:content-[''] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        isCompact ? 'before:-left-4 before:-right-4' : 'before:-left-2 before:-right-2',
+                      )}
                       aria-expanded={isBranchOpen}
                       data-child-fold={childFold ? (childFold.isExpanded ? 'unfolded' : 'folded') : undefined}
                       aria-label={childFold
@@ -601,6 +591,7 @@ export default function SidebarProjectSessions({
                     isChecked={checkedSessionIds.has(session.id)}
                     onToggleSessionSelected={onToggleSessionSelected}
                     treeRow={hasForks}
+                    onToggleFoldedChildren={childFold ? toggleFoldedChildren : undefined}
                     foldedChildrenLabel={childFold && !childFold.isExpanded && childFold.foldedCount > 0
                       ? t('sessions.foldedIdleChildren', { count: childFold.foldedCount, defaultValue: '+{{count}} inactive' })
                       : null}
@@ -617,7 +608,12 @@ export default function SidebarProjectSessions({
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 w-full justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              // A full-width 32px target (44px on a phone), still plain muted text.
+              className={cn(
+                'w-full justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground',
+                isCompact ? 'h-11' : 'h-8',
+              )}
+              data-project-fold=""
               onClick={() => setIsShowingAllSessions((previous) => !previous)}
               aria-expanded={!spawnTree.isFolded}
             >
@@ -625,12 +621,7 @@ export default function SidebarProjectSessions({
                 <>
                   <ChevronDown className="h-3 w-3" />
                   {t('sessions.showAllSessions', { hidden: spawnTree.foldedSessionCount, defaultValue: 'Show {{hidden}} more' })}
-                  <FoldedSessionIndicators
-                    foldedAlertCount={spawnTree.foldedAlertCount}
-                    foldedLiveCount={spawnTree.foldedLiveCount}
-                    foldedUnreadCount={spawnTree.foldedUnreadCount}
-                    t={t}
-                  />
+                  <FoldedSessionIndicators foldedUnreadCount={spawnTree.foldedUnreadCount} t={t} />
                 </>
               ) : (
                 <>

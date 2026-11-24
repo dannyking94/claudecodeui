@@ -4,6 +4,7 @@ import type { Project, SessionWithProvider } from '@/shared/types';
 import { buildProjectSessionTree } from '@/modules/sidebar/utils/projectSessionTree';
 import {
   compareSessionsByActivity,
+  cutTopLevelRows,
   foldChildSessions,
   groupSessionsByRootProject,
   orderRootsByOwnActivity,
@@ -745,4 +746,30 @@ test('roots of equal rank keep the order they arrived in', () => {
   ]));
 
   expect(orderLayout(sessions)).toEqual([['a', 0], ['b', 0], ['c', 0]]);
+});
+
+//----------------- PROJECT CUT ------------
+
+const cutRow = (id: string, depth = 0) => ({ depth, session: { id, __provider: 'claude' } as SessionWithProvider });
+const cutIds = (rows: { session: SessionWithProvider }[]) => rows.map((row) => row.session.id);
+
+test('the project cut keeps every conversation with something live in it, at any depth, without a slot', () => {
+  const rows = [
+    cutRow('a'), cutRow('b'), cutRow('c'),
+    cutRow('d'), cutRow('d-child', 1), cutRow('d-grandchild', 2),
+    cutRow('e'),
+    cutRow('f'), cutRow('f-child', 1),
+  ];
+  const { visible, hidden } = cutTopLevelRows(rows, { limit: 2, keptSessionIds: new Set(['c', 'd-grandchild']) });
+
+  expect(cutIds(visible)).toEqual(['a', 'b', 'c', 'd', 'd-child', 'd-grandchild']);
+  expect(cutIds(hidden)).toEqual(['e', 'f', 'f-child']);
+});
+
+test('the project cut with nothing live is the plain first-N cut', () => {
+  const rows = [cutRow('a'), cutRow('a-child', 1), cutRow('b'), cutRow('c'), cutRow('d')];
+  const { visible, hidden } = cutTopLevelRows(rows, { limit: 3 });
+
+  expect(cutIds(visible)).toEqual(['a', 'a-child', 'b', 'c']);
+  expect(cutIds(hidden)).toEqual(['d']);
 });

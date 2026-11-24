@@ -113,8 +113,9 @@ test('a project shows three top-level conversations and folds the rest behind "s
   const roots = Array.from({ length: 5 }, (_, index): SessionWithProvider => ({
     id: `root-${index + 1}`, summary: `Root ${index + 1}`, __provider: 'claude', lastActivity: minutesAgo(index + 1),
   }));
-  const child: SessionWithProvider = { id: 'child', summary: 'Child', __provider: 'claude', parentSessionId: 'root-1', lastActivity: minutesAgo(1) };
-  const { container } = render(<SidebarProjectSessions {...props({ sessions: [...roots, child], hasMoreSessions: true, activeSessions: new Set(['child']) })} />);
+  // A fork: always drawn, but not live, so root-1 still takes one of the three slots.
+  const child: SessionWithProvider = { id: 'child', summary: 'Child', __provider: 'claude', forkedFromSessionId: 'root-1', lastActivity: minutesAgo(1) };
+  const { container } = render(<SidebarProjectSessions {...props({ sessions: [...roots, child], hasMoreSessions: true, activeSessions: new Set() })} />);
 
   // Each top-level conversation is counted with its subtree.
   expect(rowIds(container)).toEqual(['root-1', 'child', 'root-2', 'root-3']);
@@ -145,4 +146,26 @@ test('with the switch off the list is the plain fork tree: no spawn nesting, no 
   expect(row(container, 'busy').getAttribute('data-parent-session-id')).toBeNull();
   expect(row(container, 'fork').getAttribute('data-parent-session-id')).toBe('secretary');
   expect(screen.queryByRole('button', { name: /showAllSessions/ })).toBeNull();
+});
+
+test('the "+N inactive" label is a second target for its arrow, and does not open the session', () => {
+  const onSessionSelect = vi.fn();
+  const { container } = render(<SidebarProjectSessions {...props({ onSessionSelect })} />);
+  const label = row(container, 'secretary').querySelector('[data-folded-children]')!;
+
+  fireEvent.click(label);
+  expect(rowIds(container)).toEqual(['secretary', 'busy', 'quiet', 'fork', 'other']);
+  expect(onSessionSelect).not.toHaveBeenCalled();
+  // Folding back goes through the arrow, which stays the accessible control.
+  fireEvent.click(screen.getByRole('button', { name: 'sessions.foldIdleChildren Secretary' }));
+  expect(rowIds(container)).toEqual(['secretary', 'busy', 'fork', 'other']);
+});
+
+test('while selecting, the label is plain text and the click ticks the row', () => {
+  const onToggleSessionSelected = vi.fn();
+  const { container } = render(<SidebarProjectSessions {...props({ selectedSessionIds: new Set(), onToggleSessionSelected })} />);
+
+  fireEvent.click(row(container, 'secretary').querySelector('[data-folded-children]')!);
+  expect(rowIds(container)).toEqual(['secretary', 'busy', 'fork', 'other']);
+  expect(onToggleSessionSelected).toHaveBeenCalledWith('project', 'secretary');
 });

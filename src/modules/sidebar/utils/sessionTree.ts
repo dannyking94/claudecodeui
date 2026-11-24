@@ -494,3 +494,60 @@ export const orderRootsByOwnActivity = <Row extends DepthTaggedRow>(
     .sort((left, right) => right.rank - left.rank || left.position - right.position)
     .flatMap((block) => block.rows);
 };
+
+export type CutTopLevelRowsOptions = {
+  /** How many top-level conversations without anything kept in them stay on screen. */
+  limit: number;
+  /**
+   * Sessions that keep their whole top-level conversation on screen whatever
+   * the limit: the live ones (spinner, purple background work, hollow-green
+   * process open) and workers that died or stalled unseen.
+   */
+  keptSessionIds?: ReadonlySet<string>;
+};
+
+/**
+ * The project-level "Show N more" cut over a flattened tree, by top-level
+ * conversation, each counted together with its whole subtree so the cut never
+ * lands between a parent and the children indented under it.
+ *
+ * A conversation holding a kept session anywhere in its subtree — a live
+ * secretary root, or an idle root whose grandchild worker is running — is
+ * exempt: it stays in place and does not use up one of the `limit` slots.
+ * The limit counts only the others, the first `limit` of which stay in their
+ * order, so what is live is never folded and the rest look as they did. Rows
+ * are not reordered, so a conversation does not jump when a turn starts.
+ *
+ * `hidden` is exactly the rows `visible` leaves out, in order.
+ */
+export const cutTopLevelRows = <Row extends DepthTaggedRow>(
+  rows: Row[],
+  { limit, keptSessionIds }: CutTopLevelRowsOptions,
+): { visible: Row[]; hidden: Row[] } => {
+  const blocks: { rows: Row[]; isKept: boolean }[] = [];
+  for (const row of rows) {
+    if (row.depth <= 0 || blocks.length === 0) {
+      blocks.push({ rows: [], isKept: false });
+    }
+    const block = blocks[blocks.length - 1];
+    block.rows.push(row);
+    if (keptSessionIds?.has(readSessionId(row.session))) {
+      block.isKept = true;
+    }
+  }
+
+  const visible: Row[] = [];
+  const hidden: Row[] = [];
+  let remainingSlots = limit;
+  for (const block of blocks) {
+    if (block.isKept) {
+      visible.push(...block.rows);
+    } else if (remainingSlots > 0) {
+      remainingSlots -= 1;
+      visible.push(...block.rows);
+    } else {
+      hidden.push(...block.rows);
+    }
+  }
+  return { visible, hidden };
+};

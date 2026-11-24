@@ -168,6 +168,13 @@ type SidebarSessionItemProps = {
   treeRow?: boolean;
   /** "+N inactive": the quiet spawned sessions folded behind this row's arrow, when it has any. */
   foldedChildrenLabel?: string | null;
+  /**
+   * Opens the fold behind this row's arrow. Makes the "+N inactive" label a
+   * second, wider target for the same toggle the arrow is; the arrow stays the
+   * keyboard and screen-reader control. Takes the session id so the list can
+   * pass one stable callback to every memoized row.
+   */
+  onToggleFoldedChildren?: (sessionId: string) => void;
   /** Names the session that spawned this one, when the row is shown outside that parent's subtree. */
   spawnedByLabel?: string | null;
   /** Takes the owning projectId so this memoized row binds itself without the list making a closure per row. */
@@ -201,6 +208,7 @@ function SidebarSessionItem({
   isChecked,
   treeRow = false,
   foldedChildrenLabel = null,
+  onToggleFoldedChildren,
   spawnedByLabel = null,
   onToggleSessionSelected,
   t,
@@ -245,7 +253,29 @@ function SidebarSessionItem({
   const nestingNotes = (foldedChildrenLabel || spawnedByLabel || ownerProjectLabel) ? (
     <>
       {foldedChildrenLabel && (
-        <span className="flex-shrink-0 text-[10px] text-muted-foreground" data-folded-children="">{foldedChildrenLabel}</span>
+        onToggleFoldedChildren && !isSelecting ? (
+          // The label is 16px of text; the invisible ::before grows what a
+          // click or tap lands on to a 32px band (taller on a phone) without
+          // moving a pixel. It stops the row's own click, which would open
+          // the session.
+          <span
+            className={cn(
+              "relative flex-shrink-0 cursor-pointer text-[10px] text-muted-foreground before:absolute before:-inset-x-1.5 before:content-[''] hover:text-foreground hover:underline",
+              isCompact ? 'before:-inset-y-3.5' : 'before:-inset-y-2',
+            )}
+            data-folded-children=""
+            data-fold-toggle=""
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleFoldedChildren(session.id);
+            }}
+          >
+            {foldedChildrenLabel}
+          </span>
+        ) : (
+          <span className="flex-shrink-0 text-[10px] text-muted-foreground" data-folded-children="">{foldedChildrenLabel}</span>
+        )
       )}
       {spawnedByLabel && (
         <span
