@@ -57,6 +57,7 @@ import { compressJsonResponses, createCompressedAssetHandler } from './modules/h
 import { createRequestWatchdog } from './modules/request-watchdog/index.js';
 import { fileTreeRoutes } from './modules/file-tree/index.js';
 import { worktreesRoutes } from './modules/worktrees/index.js';
+import { projectAppsRoutes } from './modules/project-apps/index.js';
 import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
 import { browserUseService } from './modules/browser-use/browser-use.service.js';
 import { initializeDatabase, sessionsDb } from './modules/database/index.js';
@@ -182,6 +183,9 @@ app.use('/api/git', authenticateToken, gitRoutes);
 
 // Git worktree management (protected)
 app.use('/api/worktrees', authenticateToken, worktreesRoutes);
+
+// Per-project Apps tab: proxies the fleet app dashboard (status, start/stop, log)
+app.use('/api/project-apps', authenticateToken, projectAppsRoutes);
 
 // TaskMaster API Routes (protected)
 app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);

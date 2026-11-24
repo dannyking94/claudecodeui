@@ -270,3 +270,38 @@ export const getQuickSettingsTabId = (tab: QuickSettingsTab): string => `quick-s
 
 /** DOM id of the tabpanel a quick settings tab controls; pairs with `getQuickSettingsTabId`. */
 export const getQuickSettingsTabPanelId = (tab: QuickSettingsTab): string => `quick-settings-tabpanel-${tab}`;
+
+// ---------------------------
+
+//----------------- PROJECT APPS ------------
+
+/**
+ * Compact age of a past moment ("now", "12m", "3h", "5d"), for card metadata
+ * where a full date would not fit. Accepts epoch milliseconds; null in, null out.
+ */
+export const formatCompactAge = (epochMs: number | null, nowMs: number = Date.now()): string | null => {
+  if (epochMs === null || !Number.isFinite(epochMs)) return null;
+  const seconds = Math.max(0, Math.round((nowMs - epochMs) / 1000));
+  if (seconds < 60) return 'now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86_400)}d`;
+};
+
+/**
+ * Makes an app URL openable from this browser: a loopback host (127.0.0.1,
+ * localhost) only works on the server machine, so it is swapped for the host
+ * this page was loaded from. Other URLs, and unparsable ones, pass through.
+ */
+export const toBrowserReachableUrl = (url: string, pageHostname: string = window.location.hostname): string => {
+  try {
+    const parsed = new URL(url);
+    if ((parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') && pageHostname
+      && pageHostname !== '127.0.0.1' && pageHostname !== 'localhost') {
+      parsed.hostname = pageHostname;
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+};

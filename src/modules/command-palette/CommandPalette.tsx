@@ -52,6 +52,7 @@ const NAV_TABS: Array<{ id: AppTab; labelKey: string; keywords: string }> = [
   { id: 'files', labelKey: 'commandPalette.navFiles', keywords: 'files file tree explorer' },
   { id: 'shell', labelKey: 'commandPalette.navShell', keywords: 'shell terminal console' },
   { id: 'git', labelKey: 'commandPalette.navGit', keywords: 'git diff branches' },
+  { id: 'apps', labelKey: 'commandPalette.navApps', keywords: 'apps web dashboard links servers ports' },
   { id: 'tasks', labelKey: 'commandPalette.navTasks', keywords: 'tasks taskmaster' },
 ];
 

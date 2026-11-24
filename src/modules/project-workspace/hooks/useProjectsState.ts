@@ -378,7 +378,7 @@ const renameSessionInProject = (project: Project, sessionIdToRename: string, sum
   return changed ? { ...project, sessions: nextSessions } : project;
 };
 
-const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'browser']);
+const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'apps', 'tasks', 'browser']);
 
 const isValidTab = (tab: string): tab is AppTab => {
   return VALID_TABS.has(tab) || tab.startsWith('plugin:');

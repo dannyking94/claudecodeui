@@ -22,6 +22,7 @@
     "shell": "Shell",
     "files": "파일",
     "git": "소스 관리",
+    "apps": "앱",
     "tasks": "작업",
     "browser": "Browser",
     "computer": "Computer"

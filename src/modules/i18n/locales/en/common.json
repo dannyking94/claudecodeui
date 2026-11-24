@@ -22,6 +22,7 @@
     "shell": "Shell",
     "files": "Files",
     "git": "Source Control",
+    "apps": "Apps",
     "tasks": "Tasks",
     "browser": "Browser",
     "computer": "Computer"
@@ -311,6 +312,7 @@
     "navFiles": "Go to Files",
     "navShell": "Go to Shell",
     "navGit": "Go to Git",
+    "navApps": "Go to Apps",
     "navTasks": "Go to Tasks",
     "gitFetch": "Git: Fetch",
     "gitPull": "Git: Pull",

@@ -69,7 +69,7 @@ export type ProviderModelActions = {
 //----------------- PROJECTS AND SESSIONS ------------
 
 /** Identifies the workspace pane the user is looking at; plugin panes are namespaced by plugin id. */
-export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'browser' | `plugin:${string}`;
+export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'apps' | 'tasks' | 'browser' | `plugin:${string}`;
 
 /** A message queued to be sent to a session at a future time. */
 export type ScheduledMessage = {
@@ -2059,3 +2059,94 @@ type TaskStatus =
 
 /** A TaskMaster task's priority; high, medium and low are the known values and the string fallback tolerates anything else TaskMaster emits. */
 type TaskPriority = 'high' | 'medium' | 'low' | string;
+
+// ---------------------------
+//----------------- PROJECT APPS ------------
+/** Health of a registered web app: `unknown` when the app dashboard was unreachable and only its registry was read. */
+export type ProjectAppStatus = 'up' | 'down' | 'unknown';
+
+/**
+ * One registered web app shown on the Apps tab, as `/api/project-apps` returns
+ * it (normalised from the fleet app dashboard). Runtime fields are null when
+ * the status is `unknown`.
+ */
+export type ProjectApp = {
+  id: string;
+  name: string;
+  purpose: string;
+  host: string;
+  ports: number[];
+  links: string[];
+  healthUrl: string;
+  controls: 'full' | 'status-only';
+  controlsReason: string;
+  startedBy: string;
+  note: string;
+  runs: string;
+  repo: string;
+  workdir: string;
+  codePaths: string[];
+  status: ProjectAppStatus;
+  latencyMs: number | null;
+  error: string | null;
+  pids: number[];
+  uptimeSeconds: number | null;
+  /** Epoch seconds of the last dashboard refresh that saw a browser connected. */
+  lastOpened: number | null;
+  connections: number | null;
+  ownershipDetail: string | null;
+  git: { branch: string | null; head: string | null; stale: boolean; reasons: string[] } | null;
+  commands: Record<string, string[]>;
+  missingScripts: string[];
+  /** Whether the app was placed here by its paths or, failing that, by its `started_by`. */
+  matchedBy: 'path' | 'started-by';
+};
+
+/** An unregistered address an agent wrote in one of the project's chats, grouped by origin. */
+export type ProjectChatLink = {
+  origin: string;
+  url: string;
+  port: number | null;
+  paths: string[];
+  sessionId: string;
+  sessionName: string | null;
+  provider: string;
+  mentionedAt: string | null;
+  mentions: number;
+};
+
+/** The Apps tab payload for one project, including where the registry was read from. */
+export type ProjectAppsView = {
+  projectPath: string;
+  source: 'dashboard' | 'registry' | 'none';
+  checkedAt: number;
+  error: string | null;
+  apps: ProjectApp[];
+  chatLinks: ProjectChatLink[];
+};
+
+/** A manage action the app dashboard can run for an app whose controls are `full`. */
+export type ProjectAppAction = 'start' | 'stop' | 'restart';
+
+/** What the app dashboard reported for a manage action; `refused` is set when it declined to run it. */
+export type ProjectAppActionResult = {
+  app: string;
+  action: ProjectAppAction;
+  refused: string | null;
+  exit: number | null;
+  steps: string[];
+  outputTail: string;
+  upAfter: boolean | null;
+};
+
+/** One entry of an app's start/stop history kept by the app dashboard. */
+export type ProjectAppLogEntry = {
+  ts: string;
+  app: string;
+  action: string;
+  who: string;
+  refused: string | null;
+  exit: number | null;
+  steps: string[];
+  outputTail: string;
+};

@@ -20,6 +20,7 @@ import WorkspaceErrorBoundary from '@/modules/project-workspace/WorkspaceErrorBo
 const FileTree = lazy(() => import('@/modules/file-tree').then((module) => ({ default: module.FileTree })));
 const StandaloneShell = lazy(() => import('@/modules/standalone-shell').then((module) => ({ default: module.StandaloneShell })));
 const GitPanel = lazy(() => import('@/modules/git-panel').then((module) => ({ default: module.GitPanel })));
+const ProjectAppsPanel = lazy(() => import('@/modules/project-apps').then((module) => ({ default: module.ProjectAppsPanel })));
 const SystemStatusDrawer = lazy(() => import('@/modules/system-status').then((module) => ({ default: module.SystemStatusDrawer })));
 
 type WorkspaceMainProps = {
@@ -45,7 +46,7 @@ type WorkspaceMainProps = {
   onRenameSession: (sessionId: string, summary: string) => Promise<boolean>;
 };
 
-/** Rendered by ProjectMainRegion to show the selected project's active tab: chat, files, shell, git, tasks, browser or a plugin. */
+/** Rendered by ProjectMainRegion to show the selected project's active tab: chat, files, shell, git, apps, tasks, browser or a plugin. */
 function WorkspaceMain({
   selectedProject,
   selectedSession,
@@ -226,6 +227,19 @@ function WorkspaceMain({
                 onFileOpen={handleFileOpen}
                 onProjectSelect={onProjectSelect}
                 onProjectsRefresh={onProjectsRefresh}
+              />
+            </div>
+          )}
+
+          {activeTab === 'apps' && (
+            <div className="h-full overflow-hidden">
+              <ProjectAppsPanel
+                key={selectedProject.projectId}
+                selectedProject={selectedProject}
+                onOpenSession={(sessionId) => {
+                  onNavigateToSession(sessionId);
+                  setActiveTab('chat');
+                }}
               />
             </div>
           )}

@@ -2002,3 +2002,151 @@ export type RemoteHostSample = {
   /** Short failure reason shown when `online` is false. */
   error: string | null;
 };
+
+// ---------------------------
+//----------------- PROJECT APPS MODULE CONTRACTS ------------
+/**
+ * Live status of a registered web app as cloudcli presents it.
+ *
+ * `up`/`down` come from the fleet app dashboard's own health probe; `unknown`
+ * means the dashboard could not be reached and the entry was read straight
+ * from its registry file, so nothing about the app's process is known.
+ */
+export type ProjectAppStatus = 'up' | 'down' | 'unknown';
+
+/**
+ * One web app from the fleet app registry, normalised from the dashboard's
+ * `/api/state` (or from `apps.json` when the dashboard is down).
+ *
+ * Path fields (`repo`, `workdir`, `codePaths`) drive project mapping; the
+ * runtime fields are null when the source was the registry file. Produced by
+ * the Project Apps dashboard client and consumed by its mapping and view
+ * services, and returned to the browser as-is.
+ */
+export type ProjectAppRecord = {
+  id: string;
+  name: string;
+  purpose: string;
+  host: string;
+  ports: number[];
+  /** Browser-facing URLs (tailnet/LAN); the first one is the app's main link. */
+  links: string[];
+  healthUrl: string;
+  controls: 'full' | 'status-only';
+  controlsReason: string;
+  startedBy: string;
+  note: string;
+  runs: string;
+  repo: string;
+  workdir: string;
+  /** Repo-relative paths, as written in the registry. */
+  codePaths: string[];
+  status: ProjectAppStatus;
+  latencyMs: number | null;
+  error: string | null;
+  pids: number[];
+  uptimeSeconds: number | null;
+  /** Epoch seconds of the last refresh that saw a browser connected. */
+  lastOpened: number | null;
+  connections: number | null;
+  ownershipDetail: string | null;
+  git: { branch: string | null; head: string | null; stale: boolean; reasons: string[] } | null;
+  commands: Record<string, string[]>;
+  missingScripts: string[];
+};
+
+/**
+ * Where a registry snapshot came from: the live dashboard, its registry file
+ * as a fallback, or nothing at all (neither reachable / configured).
+ */
+export type ProjectAppsSource = 'dashboard' | 'registry' | 'none';
+
+/**
+ * All registered apps at one moment, with the source they were read from.
+ * Returned by the dashboard client to the Project Apps view service.
+ */
+export type ProjectAppsSnapshot = {
+  source: ProjectAppsSource;
+  /** Epoch milliseconds when cloudcli read the snapshot. */
+  checkedAt: number;
+  /** Why the dashboard (and possibly the registry) could not be read. */
+  error: string | null;
+  apps: ProjectAppRecord[];
+};
+
+/**
+ * A web address an agent mentioned in one of the project's chats that no
+ * registered app owns. Grouped per origin; `paths` lists the distinct paths
+ * seen under it, most recent first.
+ */
+export type ProjectChatLink = {
+  origin: string;
+  /** The most recently mentioned full URL under this origin. */
+  url: string;
+  port: number | null;
+  paths: string[];
+  sessionId: string;
+  sessionName: string | null;
+  provider: string;
+  /** ISO timestamp of the latest mention, or null when the transcript had none. */
+  mentionedAt: string | null;
+  mentions: number;
+};
+
+/**
+ * How an app was assigned to the project it is shown under: by one of its
+ * paths lying inside the project, or (when no project path matches) by the
+ * project named in its `started_by` field.
+ */
+export type ProjectAppMatch = 'path' | 'started-by';
+
+/** The Apps tab payload for one project. */
+export type ProjectAppsView = {
+  projectPath: string;
+  source: ProjectAppsSource;
+  checkedAt: number;
+  error: string | null;
+  apps: Array<ProjectAppRecord & { matchedBy: ProjectAppMatch }>;
+  chatLinks: ProjectChatLink[];
+};
+
+/** A start/stop/restart the dashboard accepts; anything else is rejected at the route. */
+export type ProjectAppAction = 'start' | 'stop' | 'restart';
+
+/**
+ * Outcome of a manage action, as reported by the dashboard. `refused` holds
+ * the dashboard's reason when it declined (status-only app, foreign listener,
+ * busy port, action already running); the action did not run in that case.
+ */
+export type ProjectAppActionResult = {
+  app: string;
+  action: ProjectAppAction;
+  refused: string | null;
+  exit: number | null;
+  steps: string[];
+  outputTail: string;
+  upAfter: boolean | null;
+};
+
+/** One line of the dashboard's start/stop history (`actions.jsonl`), newest first. */
+export type ProjectAppLogEntry = {
+  ts: string;
+  app: string;
+  action: string;
+  who: string;
+  refused: string | null;
+  exit: number | null;
+  steps: string[];
+  outputTail: string;
+};
+
+/**
+ * Application-service surface used by the Project Apps HTTP router; routes
+ * parse transport input and call these, nothing else.
+ */
+export type ProjectAppsServices = {
+  resolveProjectPath(projectId: string): string;
+  getView(projectPath: string): Promise<ProjectAppsView>;
+  runAction(appId: string, action: ProjectAppAction): Promise<ProjectAppActionResult>;
+  getLog(appId: string): Promise<ProjectAppLogEntry[]>;
+};
