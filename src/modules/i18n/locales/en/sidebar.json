@@ -56,12 +56,14 @@
     "removeFromFavorites": "Remove from favorites",
     "editSessionName": "Manually edit session name",
     "deleteSession": "Delete this session permanently",
-    "activeSessionIndicator": "Recently active session (last 10 minutes)",
     "save": "Save",
     "cancel": "Cancel",
     "clearSearch": "Clear search",
     "openCommandPalette": "Open command palette",
-    "attentionRequiredIndicator": "Session needs attention",
+    "processingSessionIndicator": "Running: a turn is in progress",
+    "idleProcessIndicator": "Open: its process is alive, waiting for input",
+    "unreadActivityIndicator": "New activity since you last opened it",
+    "liveSessionIndicator": "Live: a turn is running or its process is open",
     "backgroundWorkIndicator": "Background work running"
   },
   "navigation": {

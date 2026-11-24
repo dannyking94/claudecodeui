@@ -5,7 +5,8 @@ import path from 'node:path';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
-import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
+import { claudeSecretaryActivity } from '@/modules/providers/list/claude/claude-secretary-activity.provider.js';
+import { listLiveClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
 import type {
@@ -43,6 +44,23 @@ type RunningSessionEntry = {
   canInterrupt?: false;
   statusText?: string;
   tasks?: BackgroundTaskSummary[];
+  /**
+   * A registered secretary's own claude is mid-turn, as its transcript shows;
+   * nothing runs here. The same activity `session_activity` broadcasts.
+   */
+  external?: true;
+};
+
+/** What the running-sessions poll reports; see `sessionsService.readSessionLiveness`. */
+type SessionLivenessSnapshot = {
+  sessions: RunningSessionEntry[];
+  idleProcessSessionIds: string[];
+  /**
+   * Always true: secretary turns are listed among `sessions`, so a client may
+   * drop external activity the poll no longer reports. A server without this
+   * field never listed them, and its clients must keep waiting for the event.
+   */
+  includesExternalActivity: true;
 };
 
 type CreateAppSessionResult = {
@@ -325,6 +343,66 @@ async function readCurrentContextHistory(
   };
 }
 
+/**
+ * The running sessions, given the live Claude CLI sessions from one registry
+ * scan: chat runs, background work that outlived its turn, then CLI turns.
+ */
+function collectRunningSessions(
+  liveCliSessions: Awaited<ReturnType<typeof listLiveClaudeCliSessions>>,
+): RunningSessionEntry[] {
+  const entries: RunningSessionEntry[] = chatRunRegistry.listRunningRuns();
+  const runningById = new Map(entries.map((entry) => [entry.sessionId, entry]));
+
+  for (const provider of providerRegistry.listProviders()) {
+    for (const { sessionId, tasks } of provider.runtime.listBackgroundWork?.() ?? []) {
+      const running = runningById.get(sessionId);
+      if (running) {
+        running.tasks = tasks;
+        continue;
+      }
+      entries.push({
+        sessionId,
+        provider: provider.id,
+        startedAt: Math.min(...tasks.map((task) => task.startedAt)),
+        // The completed run stays in the registry for a while, and a client
+        // that subscribes with its lastSeq replays the tail it missed.
+        lastSeq: chatRunRegistry.getRun(sessionId)?.lastSeq ?? 0,
+        background: true,
+        canInterrupt: false,
+        tasks,
+      });
+    }
+  }
+
+  // The chat-run registry only knows about turns CloudCLI drives itself, so
+  // without this a session working under the Claude CLI — including one
+  // CloudCLI spawned for its own Shell view — looks idle. A session already
+  // listed above keeps its richer entry.
+  for (const live of liveCliSessions) {
+    if (!live.isBusy) {
+      continue;
+    }
+    const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+    if (!session || runningById.has(session.session_id)) {
+      continue;
+    }
+
+    entries.push({
+      sessionId: session.session_id,
+      provider: session.provider as LLMProvider,
+      startedAt: live.startedAt,
+      lastSeq: chatRunRegistry.getRun(session.session_id)?.lastSeq ?? 0,
+      // There is no run here to abort: the turn belongs to a CLI process
+      // CloudCLI does not own, so it can be reported but not interrupted.
+      canInterrupt: false,
+      statusText: 'Running in the Claude CLI',
+    });
+    runningById.set(session.session_id, entries[entries.length - 1]);
+  }
+
+  return entries;
+}
+
 export const sessionsService = {
   /**
    * Lists provider ids that can load session history and normalize live messages.
@@ -341,54 +419,55 @@ export const sessionsService = {
    * indicators should not attach to chat streams or request replayed messages.
    */
   async listRunningSessions(): Promise<RunningSessionEntry[]> {
-    const entries: RunningSessionEntry[] = chatRunRegistry.listRunningRuns();
-    const runningById = new Map(entries.map((entry) => [entry.sessionId, entry]));
+    return collectRunningSessions(await listLiveClaudeCliSessions());
+  },
 
-    for (const provider of providerRegistry.listProviders()) {
-      for (const { sessionId, tasks } of provider.runtime.listBackgroundWork?.() ?? []) {
-        const running = runningById.get(sessionId);
-        if (running) {
-          running.tasks = tasks;
-          continue;
-        }
-        entries.push({
-          sessionId,
-          provider: provider.id,
-          startedAt: Math.min(...tasks.map((task) => task.startedAt)),
-          // The completed run stays in the registry for a while, and a client
-          // that subscribes with its lastSeq replays the tail it missed.
-          lastSeq: chatRunRegistry.getRun(sessionId)?.lastSeq ?? 0,
-          background: true,
-          canInterrupt: false,
-          tasks,
-        });
-      }
-    }
+  /**
+   * Everything the sidebar needs to tell a live session from a stopped one,
+   * from one registry scan: the running sessions, the sessions whose Claude
+   * CLI process is alive but idle at its prompt, and the registered
+   * secretaries that are mid-turn (flagged `external`).
+   *
+   * Idle processes are reported beside the running sessions rather than among
+   * them: nothing is in flight, so they must not spin or lock the row, but the
+   * process is still there. A session that is also running is left out of the
+   * idle list — the running entry says more.
+   */
+  async readSessionLiveness(): Promise<SessionLivenessSnapshot> {
+    const liveCliSessions = await listLiveClaudeCliSessions();
+    const sessions = collectRunningSessions(liveCliSessions);
+    const runningSessionIds = new Set(sessions.map((session) => session.sessionId));
 
-    // The chat-run registry only knows about turns CloudCLI drives itself, so
-    // without this a session working under the Claude CLI — including one
-    // CloudCLI spawned for its own Shell view — looks idle. A session already
-    // listed above keeps its richer entry.
-    for (const live of await listBusyClaudeCliSessions()) {
-      const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
-      if (!session || runningById.has(session.session_id)) {
+    // A secretary's claude is usually also in the registry as busy, and then
+    // already listed; this covers the rest, and is what lets a client that
+    // missed the idle broadcast drop the spinner on the next poll.
+    for (const { appSessionId, since } of claudeSecretaryActivity.listWorkingSessions()) {
+      if (runningSessionIds.has(appSessionId)) {
         continue;
       }
-
-      entries.push({
-        sessionId: session.session_id,
-        provider: session.provider as LLMProvider,
-        startedAt: live.startedAt,
-        lastSeq: chatRunRegistry.getRun(session.session_id)?.lastSeq ?? 0,
-        // There is no run here to abort: the turn belongs to a CLI process
-        // CloudCLI does not own, so it can be reported but not interrupted.
+      sessions.push({
+        sessionId: appSessionId,
+        provider: 'claude',
+        startedAt: since ?? Date.now(),
+        lastSeq: chatRunRegistry.getRun(appSessionId)?.lastSeq ?? 0,
         canInterrupt: false,
-        statusText: 'Running in the Claude CLI',
+        external: true,
       });
-      runningById.set(session.session_id, entries[entries.length - 1]);
+      runningSessionIds.add(appSessionId);
     }
 
-    return entries;
+    const idleProcessSessionIds = new Set<string>();
+    for (const live of liveCliSessions) {
+      if (live.isBusy) {
+        continue;
+      }
+      const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+      if (session && !runningSessionIds.has(session.session_id)) {
+        idleProcessSessionIds.add(session.session_id);
+      }
+    }
+
+    return { sessions, idleProcessSessionIds: [...idleProcessSessionIds], includesExternalActivity: true };
   },
 
   /**

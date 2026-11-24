@@ -168,7 +168,8 @@ export function useSessionProtection() {
     });
   }, []);
 
-  const syncProcessingSessions = useCallback<SyncProcessingSessions>((sessions) => {
+  const syncProcessingSessions = useCallback<SyncProcessingSessions>((sessions, options) => {
+    const includesExternalActivity = options?.includesExternalActivity === true;
     const now = Date.now();
 
     setProcessingSessions((prev) => {
@@ -209,14 +210,22 @@ export function useSessionProtection() {
           startedAt: snapshotStartedAt ?? existing?.startedAt ?? now,
           ...(snapshot.background ? { background: true } : {}),
           ...(snapshot.tasks ? { tasks: snapshot.tasks } : {}),
-          ...(existing?.external ? { external: true } : {}),
+          ...(existing?.external || snapshot.external ? { external: true } : {}),
         });
       }
 
       for (const [sessionId, activity] of prev) {
-        // External activity never appears in the running-sessions list; its
-        // own `session_activity` events start and end it.
-        if (!incoming.has(sessionId) && (activity.external || now - activity.startedAt < LOCAL_ACTIVITY_GRACE_MS)) {
+        if (incoming.has(sessionId)) {
+          continue;
+        }
+        // An older server never lists external activity, so only its own
+        // `session_activity` event can end it. A server that does list it is
+        // the backstop for a missed idle event — a socket that reconnected, a
+        // phone tab asleep — which used to leave a dead secretary spinning
+        // until the page was reloaded. External entries carry the turn's
+        // start, not when this client heard of it, so they get no grace.
+        const keepsExternal = activity.external && !includesExternalActivity;
+        if (keepsExternal || (!activity.external && now - activity.startedAt < LOCAL_ACTIVITY_GRACE_MS)) {
           updated.set(sessionId, activity);
         }
       }

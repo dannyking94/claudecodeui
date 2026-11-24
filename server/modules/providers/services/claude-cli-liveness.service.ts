@@ -3,14 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
- * One Claude CLI process that is currently producing a response.
+ * One Claude CLI process that is still alive.
  *
  * `providerSessionId` is Claude's own session id, which is what the registry
- * records; callers map it onto an app session themselves.
+ * records; callers map it onto an app session themselves. `isBusy` is true
+ * while it is producing a response, false while it sits at its prompt.
  */
 type LiveClaudeCliSession = {
   providerSessionId: string;
   startedAt: number;
+  isBusy: boolean;
 };
 
 /**
@@ -63,8 +65,8 @@ async function isRecordedProcessAlive(pid: number, procStart: unknown): Promise<
   }
 }
 
-/** Reads one registry file, returning null for anything that is not a live busy session. */
-async function readLiveBusySession(filePath: string): Promise<LiveClaudeCliSession | null> {
+/** Reads one registry file, returning null for anything that is not a live session. */
+async function readLiveSession(filePath: string): Promise<LiveClaudeCliSession | null> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await fsp.readFile(filePath, 'utf8'));
@@ -81,7 +83,7 @@ async function readLiveBusySession(filePath: string): Promise<LiveClaudeCliSessi
 
   const providerSessionId = typeof record.sessionId === 'string' ? record.sessionId : '';
   const pid = typeof record.pid === 'number' ? record.pid : NaN;
-  if (!providerSessionId || !Number.isInteger(pid) || pid <= 0 || record.status !== 'busy') {
+  if (!providerSessionId || !Number.isInteger(pid) || pid <= 0) {
     return null;
   }
 
@@ -90,31 +92,30 @@ async function readLiveBusySession(filePath: string): Promise<LiveClaudeCliSessi
   }
 
   const startedAt = typeof record.startedAt === 'number' ? record.startedAt : Date.now();
-  return { providerSessionId, startedAt };
+  return { providerSessionId, startedAt, isBusy: record.status === 'busy' };
 }
 
 /**
- * Lists the Claude CLI sessions that are mid-turn right now.
+ * Every Claude CLI session whose process is still alive, busy or idle, from
+ * one scan of the registry.
  *
- * Used by the providers module's sessions service so the running-sessions poll
- * also reports turns driven outside CloudCLI's own chat runs — including the
- * `claude` processes CloudCLI itself spawns for the Shell view, which live in
- * the PTY map rather than the chat-run registry. Liveness is ephemeral, so it
- * is recomputed on every read instead of being cached or persisted.
+ * Used by the providers module's sessions service: the running-sessions poll
+ * reports the busy ones as running and the idle ones as "process open", so the
+ * sidebar can tell a worker still at its prompt from one whose process exited
+ * — their transcripts look the same. Liveness is ephemeral, so it is recomputed
+ * on every read instead of being cached or persisted.
  */
-export async function listBusyClaudeCliSessions(): Promise<LiveClaudeCliSession[]> {
+export async function listLiveClaudeCliSessions(): Promise<LiveClaudeCliSession[]> {
   let entries: string[];
   try {
     entries = await fsp.readdir(registryDirectory());
   } catch {
-    // No registry directory at all is the normal case for an install that has
-    // never run the CLI, and an unreadable one is not worth failing a poll for.
     return [];
   }
 
   const registryFiles = entries.filter((entry) => entry.endsWith('.json')).slice(0, MAX_REGISTRY_FILES);
   const sessions = await Promise.all(
-    registryFiles.map((entry) => readLiveBusySession(path.join(registryDirectory(), entry))),
+    registryFiles.map((entry) => readLiveSession(path.join(registryDirectory(), entry))),
   );
 
   return sessions.filter((session): session is LiveClaudeCliSession => session !== null);

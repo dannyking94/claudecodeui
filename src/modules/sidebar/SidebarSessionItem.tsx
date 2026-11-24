@@ -12,6 +12,41 @@ import { useCompactSidebar } from '@/modules/sidebar/hooks/useCompactSidebar';
 import { useProviderSessionIdCopy } from '@/modules/sidebar/hooks/useProviderSessionIdCopy';
 import SessionOptions from '@/modules/sidebar/SessionOptions';
 
+type SessionStatusKind = 'background' | 'idle-process' | 'unread';
+
+/**
+ * The one dot a row shows, most important first. A turn in flight has no dot:
+ * the spinner on the right of the row already says it. Otherwise a dot that is
+ * not amber always means a process is still there, and a row with no dot and
+ * no spinner has nothing running (stopped, or never started here).
+ */
+const STATUS_DOT_CLASSES: Record<SessionStatusKind, string> = {
+  background: 'animate-pulse bg-purple-500 dark:bg-purple-400',
+  // Hollow: alive, but not doing anything.
+  'idle-process': 'border-2 border-green-500 bg-transparent',
+  unread: 'bg-amber-500',
+};
+
+const readSessionStatusIndicator = (
+  state: { isProcessing: boolean; hasBackgroundWork: boolean; hasIdleProcess: boolean; hasUnreadActivity: boolean },
+  t: TFunction,
+): { kind: SessionStatusKind; label: string } | null => {
+  // Background work is reported apart from a turn, so it is checked first.
+  if (state.hasBackgroundWork) {
+    return { kind: 'background', label: t('tooltips.backgroundWorkIndicator', { defaultValue: 'Background work running' }) };
+  }
+  if (state.isProcessing) {
+    return null;
+  }
+  if (state.hasIdleProcess) {
+    return { kind: 'idle-process', label: t('tooltips.idleProcessIndicator', { defaultValue: 'Open: its process is alive, waiting for input' }) };
+  }
+  if (state.hasUnreadActivity) {
+    return { kind: 'unread', label: t('tooltips.unreadActivityIndicator', { defaultValue: 'New activity since you last opened it' }) };
+  }
+  return null;
+};
+
 type SidebarSessionItemProps = {
   project: Project;
   session: SessionWithProvider;
@@ -19,6 +54,9 @@ type SidebarSessionItemProps = {
   isProcessing: boolean;
   /** The session's turn has ended but the agents, workflows or commands it launched still run. */
   hasBackgroundWork: boolean;
+  /** A Claude CLI process for this session is alive but idle at its prompt. */
+  hasIdleProcess?: boolean;
+  /** Unread: something happened in this session since the user last opened it. */
   needsAttention: boolean;
   currentTime: Date;
   /** Resolved for this row, so a keystroke elsewhere does not invalidate it. */
@@ -56,6 +94,7 @@ function SidebarSessionItem({
   selectedSession,
   isProcessing,
   hasBackgroundWork,
+  hasIdleProcess = false,
   needsAttention,
   currentTime,
   isEditing,
@@ -82,16 +121,13 @@ function SidebarSessionItem({
   const isSelected = selectedSession?.id === session.id;
   const compactSessionAge = formatCompactAge(sessionView.sessionTime, currentTime);
   const [isMobileOptionsOpen, setIsMobileOptionsOpen] = useState(false);
-  const showAttentionIndicator = needsAttention && !isSelected;
-  // Background work takes the recent-activity dot's place: the session is
-  // still doing something, which says more than that it was touched lately.
-  const showBackgroundIndicator = !showAttentionIndicator && hasBackgroundWork;
-  const showRecentIndicator = !showAttentionIndicator && !showBackgroundIndicator && !isProcessing && sessionView.isActive;
-  const indicatorLabel = showAttentionIndicator
-    ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
-    : showBackgroundIndicator
-      ? t('tooltips.backgroundWorkIndicator', { defaultValue: 'Background work running' })
-      : t('tooltips.activeSessionIndicator');
+  const statusIndicator = readSessionStatusIndicator({
+    isProcessing,
+    hasBackgroundWork,
+    hasIdleProcess,
+    hasUnreadActivity: needsAttention && !isSelected,
+  }, t);
+  const isLive = isProcessing || hasBackgroundWork || hasIdleProcess;
   const providerLabel = PROVIDER_LABELS[session.__provider];
 
   // The desktop controls live in SessionOptions, which owns the rename panel and
@@ -203,21 +239,20 @@ function SidebarSessionItem({
 
   return (
     <div className="group relative">
-      {(showAttentionIndicator || showBackgroundIndicator || showRecentIndicator) && (
-        <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
-          <Tooltip content={indicatorLabel} position="right">
+      {statusIndicator && (
+        <div className="absolute left-0 top-1/2 z-10 -translate-x-2 -translate-y-1/2 transform">
+          {/* A 16px target around the 8px dot, so it can be hovered, and
+              long-pressed on a phone, without hitting the row instead. */}
+          <Tooltip content={statusIndicator.label} position="right">
             <div
               role="status"
-              aria-label={indicatorLabel}
-              className={cn(
-                'h-2 w-2 animate-pulse rounded-full',
-                showAttentionIndicator
-                  ? 'bg-amber-500'
-                  : showBackgroundIndicator
-                    ? 'bg-purple-500 dark:bg-purple-400'
-                    : 'bg-green-500',
-              )}
-            />
+              aria-label={statusIndicator.label}
+              title={statusIndicator.label}
+              data-session-status={statusIndicator.kind}
+              className="flex h-4 w-4 items-center justify-center"
+            >
+              <span className={cn('block h-2 w-2 rounded-full', STATUS_DOT_CLASSES[statusIndicator.kind])} />
+            </div>
           </Tooltip>
         </div>
       )}
@@ -236,7 +271,7 @@ function SidebarSessionItem({
             isSelected ? 'bg-primary/5 border-primary/20' : '',
             !treeRow && (!isSelected && isProcessing
               ? 'border-border/60 bg-muted/20'
-              : !isSelected && sessionView.isActive
+              : !isSelected && isLive
                 ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
                 : 'border-border/30'),
             isChecked && 'border-primary/40 bg-primary/10',
@@ -265,7 +300,7 @@ function SidebarSessionItem({
                 </div>
                 {isProcessing ? (
                   <span className="ml-auto flex-shrink-0">
-                    <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
+                    <Tooltip content={t('tooltips.processingSessionIndicator', 'Running: a turn is in progress')} position="top">
                       <span className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin" />
                       </span>
@@ -325,6 +360,9 @@ function SidebarSessionItem({
                 </p>
                 <p id="mobile-session-options-description" className="text-xs text-muted-foreground">
                   {providerLabel} session
+                  {statusIndicator && (
+                    <span data-session-status-text="">{` · ${statusIndicator.label}`}</span>
+                  )}
                 </p>
               </div>
             </div>
@@ -486,7 +524,7 @@ function SidebarSessionItem({
             isSelected ? 'border-primary/20 bg-primary/5' : 'border-border/30',
             !treeRow && (!isSelected && isProcessing
               ? 'border-border/60 bg-muted/20 hover:bg-muted/25'
-              : !isSelected && sessionView.isActive
+              : !isSelected && isLive
                 ? 'border-green-500/30 bg-green-50/5 hover:bg-green-50/10 dark:bg-green-900/5 dark:hover:bg-green-900/10'
                 : 'hover:bg-accent/50'),
             treeRow && !isSelected && 'hover:bg-accent/50',
@@ -541,7 +579,7 @@ function SidebarSessionItem({
                       isEditing ? 'opacity-0' : !isSelecting && 'group-hover:opacity-0',
                     )}
                   >
-                    <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
+                    <Tooltip content={t('tooltips.processingSessionIndicator', 'Running: a turn is in progress')} position="top">
                       <span className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin" />
                       </span>

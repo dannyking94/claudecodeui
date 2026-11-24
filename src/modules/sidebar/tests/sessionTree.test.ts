@@ -6,10 +6,10 @@ import {
   compareSessionsByActivity,
   foldChildSessions,
   groupSessionsByRootProject,
+  orderRootsByOwnActivity,
   pickProjectEntrySession,
 } from '@/modules/sidebar/utils/sessionTree';
 import type { ProjectSessions, SessionTreeRow } from '@/modules/sidebar/utils/sessionTree';
-import { RECENT_ACTIVITY_WINDOW_MS } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 
 type SessionFixture = {
   id: string;
@@ -445,13 +445,6 @@ const readRows = (rows: SessionTreeRow[]): Array<[string, number] | [string, num
     ];
   });
 
-/**
- * The cutoff the sidebar passes when it folds children that are at rest: the
- * same ten minutes the row's own "recently active" dot is drawn from, so a
- * child folds only once it has stopped claiming to be recently active.
- */
-const ACTIVE_SINCE = Date.parse('2026-08-28T12:00:00.000Z') - RECENT_ACTIVITY_WINDOW_MS;
-
 /** A parent whose children were last active the given number of minutes ago. */
 const createAgedFamily = (
   childAgesInMinutes: readonly number[],
@@ -466,11 +459,9 @@ const createAgedFamily = (
   ...extra,
 ]));
 
-test('active children stay on screen and every inactive one folds onto the parent', () => {
-  // The owner's sidebar: two workers still writing, three that reported and
-  // went quiet. No "three, then show more" — all three quiet ones fold.
+test('live children stay on screen and every other one folds onto the parent', () => {
   const rows = foldChildSessions(createAgedFamily([2, 4, 40, 300, 900]), {
-    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-1', 'child-2']),
   });
 
   expect(readRows(rows)).toEqual([
@@ -480,12 +471,22 @@ test('active children stay on screen and every inactive one folds onto the paren
   ]);
 });
 
-test('there is no cap on how many active children render', () => {
-  // Nine children written to within the window and one at rest: all nine
-  // render, and the arrow holds only the resting one.
-  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5, 6, 7, 8, 9, 600]), {
-    activeSince: ACTIVE_SINCE,
+test('a child that wrote a minute ago but is not live folds: recency is not liveness', () => {
+  // The owner's screenshot: workers stopped 17 and 35 minutes ago, and one that
+  // had just finished, all still on screen. Only the running one stays.
+  const rows = foldChildSessions(createAgedFamily([0, 1, 17, 35]), {
+    liveSessionIds: new Set(['child-1']),
   });
+
+  expect(readRows(rows)).toEqual([
+    ['parent', 0, 'folded:3'],
+    ['child-1', 1],
+  ]);
+});
+
+test('there is no cap on how many live children render', () => {
+  const live = new Set(Array.from({ length: 9 }, (_, index) => `child-${index + 1}`));
+  const rows = foldChildSessions(createAgedFamily([1, 2, 3, 4, 5, 6, 7, 8, 9, 600]), { liveSessionIds: live });
 
   expect(readRows(rows)).toEqual([
     ['parent', 0, 'folded:1'],
@@ -493,16 +494,12 @@ test('there is no cap on how many active children render', () => {
   ]);
 });
 
-test('a parent whose children are all inactive shows only itself and its arrow', () => {
-  const rows = foldChildSessions(createAgedFamily([100, 200, 900]), {
-    activeSince: ACTIVE_SINCE,
-  });
-
-  expect(readRows(rows)).toEqual([['parent', 0, 'folded:3']]);
+test('a parent with no live children shows only itself and its arrow', () => {
+  expect(readRows(foldChildSessions(createAgedFamily([100, 200, 900])))).toEqual([['parent', 0, 'folded:3']]);
 });
 
 test('a parent with nothing to fold carries no arrow', () => {
-  const rows = foldChildSessions(createAgedFamily([1, 2]), { activeSince: ACTIVE_SINCE });
+  const rows = foldChildSessions(createAgedFamily([1, 2]), { liveSessionIds: new Set(['child-1', 'child-2']) });
 
   expect(readRows(rows)).toEqual([
     ['parent', 0],
@@ -511,33 +508,17 @@ test('a parent with nothing to fold carries no arrow', () => {
   ]);
 });
 
-test('unfolding a parent reveals every inactive child in activity order', () => {
-  const rows = foldChildSessions(createAgedFamily([2, 40, 300]), {
-    activeSince: ACTIVE_SINCE,
-    expandedParentIds: new Set(['parent']),
-  });
+test('unfolding a parent reveals every child in activity order, and toggling back folds them', () => {
+  const sessions = createAgedFamily([2, 40, 300]);
+  const liveSessionIds = new Set(['child-1']);
 
-  expect(readRows(rows)).toEqual([
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds, expandedParentIds: new Set(['parent']) }))).toEqual([
     ['parent', 0, 'unfolded'],
     ['child-1', 1],
     ['child-2', 1],
     ['child-3', 1],
   ]);
-});
-
-test('toggling the parent back folds the inactive children again', () => {
-  const sessions = createAgedFamily([2, 40, 300]);
-  const unfolded = foldChildSessions(sessions, {
-    activeSince: ACTIVE_SINCE,
-    expandedParentIds: new Set(['parent']),
-  });
-  const refolded = foldChildSessions(sessions, {
-    activeSince: ACTIVE_SINCE,
-    expandedParentIds: new Set(),
-  });
-
-  expect(unfolded.length).toBe(4);
-  expect(readRows(refolded)).toEqual([
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds, expandedParentIds: new Set() }))).toEqual([
     ['parent', 0, 'folded:2'],
     ['child-1', 1],
   ]);
@@ -546,9 +527,7 @@ test('toggling the parent back folds the inactive children again', () => {
 test('a folded child takes its own descendants with it, and the count says so', () => {
   const rows = foldChildSessions(createAgedFamily([2, 300], [
     { id: 'grandchild', parentSessionId: 'child-2', lastActivity: minutesAgo(400) },
-  ]), {
-    activeSince: ACTIVE_SINCE,
-  });
+  ]), { liveSessionIds: new Set(['child-1']) });
 
   expect(readRows(rows)).toEqual([
     ['parent', 0, 'folded:2'],
@@ -557,8 +536,6 @@ test('a folded child takes its own descendants with it, and the count says so', 
 });
 
 test('a worker\'s own children fold behind the arrow on the worker\'s row', () => {
-  // Nested level: the worker is active, two of its children are not. Each
-  // parent carries its own fold, and unfolding one leaves the other alone.
   const sessions = buildSessionTree(createSessions([
     { id: 'root', lastActivity: minutesAgo(1) },
     { id: 'worker', parentSessionId: 'root', lastActivity: minutesAgo(2) },
@@ -567,17 +544,15 @@ test('a worker\'s own children fold behind the arrow on the worker\'s row', () =
     { id: 'sub-2', parentSessionId: 'worker', lastActivity: minutesAgo(60) },
     { id: 'sub-3', parentSessionId: 'worker', lastActivity: minutesAgo(90) },
   ]));
+  const liveSessionIds = new Set(['worker', 'sub-1']);
 
-  expect(readRows(foldChildSessions(sessions, { activeSince: ACTIVE_SINCE }))).toEqual([
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds }))).toEqual([
     ['root', 0, 'folded:1'],
     ['worker', 1, 'folded:2'],
     ['sub-1', 2],
   ]);
 
-  expect(readRows(foldChildSessions(sessions, {
-    activeSince: ACTIVE_SINCE,
-    expandedParentIds: new Set(['worker']),
-  }))).toEqual([
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds, expandedParentIds: new Set(['worker']) }))).toEqual([
     ['root', 0, 'folded:1'],
     ['worker', 1, 'unfolded'],
     ['sub-1', 2],
@@ -586,44 +561,11 @@ test('a worker\'s own children fold behind the arrow on the worker\'s row', () =
   ]);
 });
 
-test('a running child never folds, however old its last message is', () => {
-  // A worker mid-turn writes nothing to its transcript while it thinks, so its
-  // timestamp keeps ageing. A run in flight outranks any clock.
-  const rows = foldChildSessions(createAgedFamily([2, 600]), {
-    activeSince: ACTIVE_SINCE,
-    liveSessionIds: new Set(['child-2']),
-  });
+test('a live child never folds, however old its last message is', () => {
+  const rows = foldChildSessions(createAgedFamily([2, 600]), { liveSessionIds: new Set(['child-2']) });
 
   expect(readRows(rows)).toEqual([
-    ['parent', 0],
-    ['child-1', 1],
-    ['child-2', 1],
-  ]);
-});
-
-test('a child blocked on the user stays on screen although nothing is streaming', () => {
-  const rows = foldChildSessions(createAgedFamily([2, 300]), {
-    activeSince: ACTIVE_SINCE,
-    liveSessionIds: new Set(['child-2']),
-    waitingSessionIds: new Set(['child-2']),
-  });
-
-  expect(readRows(rows)).toEqual([
-    ['parent', 0],
-    ['child-1', 1],
-    ['child-2', 1],
-  ]);
-});
-
-test('a blocked child listed only as waiting is still never folded', () => {
-  const rows = foldChildSessions(createAgedFamily([1, 400]), {
-    activeSince: ACTIVE_SINCE,
-    waitingSessionIds: new Set(['child-2']),
-  });
-
-  expect(readRows(rows)).toEqual([
-    ['parent', 0],
-    ['child-1', 1],
+    ['parent', 0, 'folded:1'],
     ['child-2', 1],
   ]);
 });
@@ -631,39 +573,18 @@ test('a blocked child listed only as waiting is still never folded', () => {
 test('a branch that is live only through a grandchild stays on screen', () => {
   const rows = foldChildSessions(createAgedFamily([2, 400], [
     { id: 'busy-grandchild', parentSessionId: 'child-2', lastActivity: minutesAgo(450) },
-  ]), {
-    activeSince: ACTIVE_SINCE,
-    liveSessionIds: new Set(['busy-grandchild']),
-  });
+  ]), { liveSessionIds: new Set(['busy-grandchild']) });
 
   expect(readRows(rows)).toEqual([
-    ['parent', 0],
-    ['child-1', 1],
+    ['parent', 0, 'folded:1'],
     ['child-2', 1],
     ['busy-grandchild', 2],
   ]);
 });
 
-test('a quiet child stays on screen for the grandchild still writing under it', () => {
-  const rows = foldChildSessions(createAgedFamily([2, 400], [
-    { id: 'busy-grandchild', parentSessionId: 'child-2', lastActivity: minutesAgo(1) },
-  ]), {
-    activeSince: ACTIVE_SINCE,
-  });
-
-  // A branch sorts by its freshest member, so the child with the grandchild
-  // still writing (1m) comes ahead of its sibling (2m).
-  expect(readRows(rows)).toEqual([
-    ['parent', 0],
-    ['child-2', 1],
-    ['busy-grandchild', 2],
-    ['child-1', 1],
-  ]);
-});
-
-test('the open session keeps its row after it goes quiet', () => {
+test('the open session keeps its row though it is not live', () => {
   const rows = foldChildSessions(createAgedFamily([2, 900, 950]), {
-    activeSince: ACTIVE_SINCE,
+    liveSessionIds: new Set(['child-1']),
     pinnedSessionIds: new Set(['child-2']),
   });
 
@@ -677,71 +598,45 @@ test('the open session keeps its row after it goes quiet', () => {
 test('a pinned grandchild keeps the child it hangs from on screen', () => {
   const rows = foldChildSessions(createAgedFamily([2, 300], [
     { id: 'open-grandchild', parentSessionId: 'child-2', lastActivity: minutesAgo(300) },
-  ]), {
-    activeSince: ACTIVE_SINCE,
-    pinnedSessionIds: new Set(['open-grandchild']),
-  });
+  ]), { pinnedSessionIds: new Set(['open-grandchild']) });
 
   expect(readRows(rows)).toEqual([
-    ['parent', 0],
-    ['child-1', 1],
+    ['parent', 0, 'folded:1'],
     ['child-2', 1],
     ['open-grandchild', 2],
   ]);
 });
 
 test('no fold is ever left holding a live session', () => {
-  // Why the fold carries a count and no dots.
   const liveSessionIds = new Set(['child-3', 'child-5']);
-  const rows = foldChildSessions(createAgedFamily([1, 200, 300, 400, 500, 600]), {
-    activeSince: ACTIVE_SINCE,
-    liveSessionIds,
-    waitingSessionIds: new Set(['child-5']),
-  });
+  const rows = foldChildSessions(createAgedFamily([1, 200, 300, 400, 500, 600]), { liveSessionIds });
 
   const renderedIds = new Set(rows.map((row) => String(row.session.id)));
   const foldedIds = Array.from({ length: 6 }, (_, index) => `child-${index + 1}`)
     .filter((id) => !renderedIds.has(id));
 
-  expect(foldedIds).toEqual(['child-2', 'child-4', 'child-6']);
+  expect(foldedIds).toEqual(['child-1', 'child-2', 'child-4', 'child-6']);
   expect(foldedIds.every((id) => !liveSessionIds.has(id))).toBe(true);
-  expect(rows[0].childFold?.foldedCount).toBe(3);
+  expect(rows[0].childFold?.foldedCount).toBe(4);
 });
 
-test('a folded child unfolds itself as soon as it writes again', () => {
-  // A worker given more work after it reported must not stay buried because it
-  // was quiet once. Nothing is remembered between calls.
-  const quiet = foldChildSessions(createAgedFamily([2, 300]), { activeSince: ACTIVE_SINCE });
-  expect(readRows(quiet)).toEqual([
+test('a folded child unfolds itself as soon as it goes live, and folds once its process exits', () => {
+  const sessions = createAgedFamily([2, 300]);
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds: new Set(['child-1']) }))).toEqual([
     ['parent', 0, 'folded:1'],
     ['child-1', 1],
   ]);
-
-  const writingAgain = foldChildSessions(createAgedFamily([2, 0]), { activeSince: ACTIVE_SINCE });
-  expect(readRows(writingAgain)).toEqual([
-    ['parent', 0],
-    ['child-2', 1],
-    ['child-1', 1],
-  ]);
-});
-
-test('a folded child unfolds itself as soon as it starts running', () => {
-  const rows = foldChildSessions(createAgedFamily([2, 300]), {
-    activeSince: ACTIVE_SINCE,
-    liveSessionIds: new Set(['child-2']),
-  });
-
-  expect(readRows(rows)).toEqual([
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds: new Set(['child-1', 'child-2']) }))).toEqual([
     ['parent', 0],
     ['child-1', 1],
     ['child-2', 1],
   ]);
+  expect(readRows(foldChildSessions(sessions, { liveSessionIds: new Set() }))).toEqual([
+    ['parent', 0, 'folded:2'],
+  ]);
 });
 
-test('an unfolded parent survives a re-render that replaces every session object', () => {
-  // The sidebar rebuilds its rows from scratch on every websocket refresh. The
-  // expansion is held by parent id, so a user reading the folded children is
-  // never re-folded under by a refresh, a child going quiet, or the clock.
+test('an unfolded parent survives a re-render in which every child stops', () => {
   const expandedParentIds = new Set(['parent']);
   const expected = [
     ['parent', 0, 'unfolded'],
@@ -750,27 +645,20 @@ test('an unfolded parent survives a re-render that replaces every session object
     ['child-3', 1],
   ];
 
-  const firstRender = foldChildSessions(createAgedFamily([2, 200, 900]), {
-    activeSince: ACTIVE_SINCE,
-    expandedParentIds,
-  });
-  expect(readRows(firstRender)).toEqual(expected);
-
-  // Fresh session objects, same ids — and the first child has now gone quiet.
-  const secondRender = foldChildSessions(createAgedFamily([30, 200, 900]), {
-    activeSince: ACTIVE_SINCE,
-    expandedParentIds,
-  });
-  expect(readRows(secondRender)).toEqual(expected);
+  expect(readRows(foldChildSessions(createAgedFamily([2, 200, 900]), {
+    expandedParentIds, liveSessionIds: new Set(['child-1']),
+  }))).toEqual(expected);
+  expect(readRows(foldChildSessions(createAgedFamily([30, 200, 900]), { expandedParentIds }))).toEqual(expected);
 });
 
-test('with no cutoff supplied nothing folds for being quiet', () => {
-  expect(readRows(foldChildSessions(createAgedFamily([100, 200, 900, 1000])))).toEqual([
-    ['parent', 0],
+test('children that are not foldable always render', () => {
+  const rows = foldChildSessions(createAgedFamily([100, 200]), {
+    isFoldableChild: (session) => session.id === 'child-2',
+  });
+
+  expect(readRows(rows)).toEqual([
+    ['parent', 0, 'folded:1'],
     ['child-1', 1],
-    ['child-2', 1],
-    ['child-3', 1],
-    ['child-4', 1],
   ]);
 });
 
@@ -781,4 +669,80 @@ test('sessions with no children are left alone', () => {
 
   expect(readRows(rows)).toEqual([['alone', 0]]);
   expect(foldChildSessions([])).toEqual([]);
+});
+
+/** `[id, depth]` rows of a flattened tree, re-ordered by root. */
+const orderLayout = (
+  sessions: SessionWithProvider[],
+  options: Parameters<typeof orderRootsByOwnActivity>[1] = {},
+): Array<[string, number]> =>
+  orderRootsByOwnActivity(
+    sessions.map((session) => ({ session, depth: session.__depth ?? 0 })),
+    options,
+  ).map((row) => [String(row.session.id), row.depth]);
+
+test('a stale root does not rise on the activity of children that fold away', () => {
+  // The owner's "deprecated" secretary: six days old, 25 stopped workers that
+  // wrote an hour ago. It used to rank by those workers and hold a place in the
+  // project's top three; now it ranks by its own six days.
+  const sessions = buildSessionTree(createSessions([
+    { id: 'current', lastActivity: minutesAgo(1) },
+    { id: 'deprecated', lastActivity: minutesAgo(6 * 24 * 60) },
+    { id: 'old-worker-1', parentSessionId: 'deprecated', lastActivity: minutesAgo(50) },
+    { id: 'old-worker-2', parentSessionId: 'deprecated', lastActivity: minutesAgo(60) },
+    { id: 'tailscale', lastActivity: minutesAgo(2 * 24 * 60) },
+  ]));
+  expect(readLayout(sessions).map(([id]) => id)).toEqual(['current', 'deprecated', 'old-worker-1', 'old-worker-2', 'tailscale']);
+
+  expect(orderLayout(sessions)).toEqual([
+    ['current', 0],
+    ['tailscale', 0],
+    ['deprecated', 0],
+    ['old-worker-1', 1],
+    ['old-worker-2', 1],
+  ]);
+});
+
+test('a live descendant lends its root its own activity, not "now"', () => {
+  const sessions = buildSessionTree(createSessions([
+    { id: 'recent', lastActivity: minutesAgo(10) },
+    { id: 'old-parent', lastActivity: minutesAgo(5000) },
+    { id: 'quiet-child', parentSessionId: 'old-parent', lastActivity: minutesAgo(4000) },
+    { id: 'live-grandchild', parentSessionId: 'quiet-child', lastActivity: minutesAgo(1) },
+    { id: 'old-live-root', lastActivity: minutesAgo(3000) },
+  ]));
+
+  // The live grandchild is drawn, so its minute-old write ranks its family
+  // first; the root that is live itself keeps its own place and does not jump.
+  expect(orderLayout(sessions, { liveSessionIds: new Set(['live-grandchild', 'old-live-root']) })).toEqual([
+    ['old-parent', 0],
+    ['quiet-child', 1],
+    ['live-grandchild', 2],
+    ['recent', 0],
+    ['old-live-root', 0],
+  ]);
+});
+
+test('a fork, which never folds, still lends its activity to its root', () => {
+  const sessions = buildSessionTree(createSessions([
+    { id: 'recent', lastActivity: minutesAgo(10) },
+    { id: 'old-parent', lastActivity: minutesAgo(5000) },
+    { id: 'fork', parentSessionId: 'old-parent', lastActivity: minutesAgo(1) },
+  ]));
+
+  expect(orderLayout(sessions, { isFoldableChild: (session) => session.id !== 'fork' })).toEqual([
+    ['old-parent', 0],
+    ['fork', 1],
+    ['recent', 0],
+  ]);
+});
+
+test('roots of equal rank keep the order they arrived in', () => {
+  const sessions = buildSessionTree(createSessions([
+    { id: 'a', lastActivity: minutesAgo(5) },
+    { id: 'b', lastActivity: minutesAgo(5) },
+    { id: 'c', lastActivity: minutesAgo(5) },
+  ]));
+
+  expect(orderLayout(sessions)).toEqual([['a', 0], ['b', 0], ['c', 0]]);
 });

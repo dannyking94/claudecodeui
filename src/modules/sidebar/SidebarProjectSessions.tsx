@@ -12,10 +12,11 @@ import {
   VISIBLE_SESSION_LIMIT,
   foldChildSessions,
   isSpawnNestingEnabled,
+  orderRootsByOwnActivity,
 } from '@/modules/sidebar/utils/sessionTree';
+import { useIdleProcessSessionIdSet } from '@/shared/context/SessionProtectionContext';
 import type { ChildSessionFold } from '@/modules/sidebar/utils/sessionTree';
 import {
-  RECENT_ACTIVITY_WINDOW_MS,
   readExpandedParentSessionIds,
   writeExpandedParentSessionId,
 } from '@/modules/sidebar/utils/sidebarProjectFormatting';
@@ -85,37 +86,29 @@ const relinkVisibleRows = (rows: ProjectSessionTreeRow[]): ProjectSessionTreeRow
 
 /**
  * Dots on the project's "Show N more" toggle, standing in for the sessions it
- * is holding: amber for anything blocked on the user, green for anything still
- * running. Only this fold needs them — it cuts by top-level conversation, so a
- * whole branch with a worker mid-turn can fall past the cut. The arrows on
- * parent rows cannot: a running or blocked child is never one they fold.
+ * is holding: amber for unread activity, green for anything live. Only this
+ * fold needs them — it cuts by top-level conversation, so a live root can in
+ * principle fall past the cut. The arrows on parent rows cannot: a live child
+ * is never one they fold.
  */
 function FoldedSessionIndicators({
   foldedLiveCount,
-  foldedWaitingCount,
+  foldedUnreadCount,
   t,
 }: {
   foldedLiveCount: number;
-  foldedWaitingCount: number;
+  foldedUnreadCount: number;
   t: TFunction;
 }) {
-  const runningCount = Math.max(foldedLiveCount - foldedWaitingCount, 0);
-
+  const unreadLabel = t('tooltips.unreadActivityIndicator', { defaultValue: 'New activity since you last opened it' });
+  const liveLabel = t('tooltips.liveSessionIndicator', { defaultValue: 'Live: a turn is running or its process is open' });
   return (
     <>
-      {foldedWaitingCount > 0 && (
-        <span
-          role="status"
-          className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
-          aria-label={t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })}
-        />
+      {foldedUnreadCount > 0 && (
+        <span role="status" title={unreadLabel} aria-label={unreadLabel} className="h-1.5 w-1.5 rounded-full bg-amber-500" />
       )}
-      {runningCount > 0 && (
-        <span
-          role="status"
-          className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"
-          aria-label={t('tooltips.activeSessionIndicator')}
-        />
+      {foldedLiveCount > 0 && (
+        <span role="status" title={liveLabel} aria-label={liveLabel} className="h-1.5 w-1.5 rounded-full bg-green-500" />
       )}
     </>
   );
@@ -177,6 +170,7 @@ export default function SidebarProjectSessions({
   t,
 }: SidebarProjectSessionsProps) {
   const isCompact = useCompactSidebar();
+  const idleProcessSessionIds = useIdleProcessSessionIdSet();
   // Spawned-session nesting (ours) rides on the fork tree (upstream's): the same
   // builder hangs a worker under the session that launched it, and the block
   // below folds the quiet ones and caps the project at a few conversations.
@@ -199,38 +193,46 @@ export default function SidebarProjectSessions({
       return next;
     });
   };
-  const currentTimeMs = currentTime.getTime();
+  // Live = something actually running: a turn in flight, background work, or
+  // a Claude CLI process alive at its prompt. Not "written to recently", and
+  // not the unread (amber) flag, which stays set on a stopped worker until
+  // it is opened.
+  const liveSessionIds = useMemo<ReadonlySet<string>>(
+    () => (idleProcessSessionIds.size === 0
+      ? activeSessions
+      : new Set([...activeSessions, ...idleProcessSessionIds])),
+    [activeSessions, idleProcessSessionIds],
+  );
   const spawnTree = useMemo(() => {
     if (!spawnNesting) {
       return null;
     }
 
     const spawnedSessionIds = new Set(treeRows.filter((row) => row.link === 'spawn').map((row) => row.session.id));
-    // Running, or waiting on the user. Ids belonging to other projects are
-    // harmless: the fold only looks up sessions it is already rendering.
-    const liveSessionIds = new Set<string>([...activeSessions, ...attentionSessionIds]);
+    const isFoldableChild = (session: SessionWithProvider) => spawnedSessionIds.has(session.id);
+    // Roots are ranked by what stays visible, so one whose recent activity is
+    // all in folded, stopped workers falls past the cut like any old session.
+    const orderedRows = orderRootsByOwnActivity(treeRows, {
+      liveSessionIds,
+      isFoldableChild,
+    });
     const foldedRows = foldChildSessions(
-      treeRows.map((row) => ({ ...row.session, __depth: row.depth })),
+      orderedRows.map((row) => ({ ...row.session, __depth: row.depth })),
       {
         expandedParentIds,
+        // Ids belonging to other projects are harmless: the fold only looks
+        // up sessions it is already rendering.
         liveSessionIds,
-        // Blocked on a permission dialog or a question: not streaming, and
-        // quiet on disk, so it is named separately or the fold would read it
-        // as at rest and take away the one row the user has to act on.
-        waitingSessionIds: attentionSessionIds,
         // The session on screen, and one being renamed, keep their rows.
         pinnedSessionIds: new Set([selectedSessionId, sessionRenameId].filter((id): id is string => Boolean(id))),
-        // The same window the row's own green dot is drawn from, so a child
-        // folds only once it has stopped claiming to be recently active.
-        activeSince: currentTimeMs - RECENT_ACTIVITY_WINDOW_MS,
         // A fork keeps the fork tree's own always-open default.
-        isFoldableChild: (session) => spawnedSessionIds.has(session.id),
+        isFoldableChild,
       },
     );
     const childFoldBySessionId = new Map<string, ChildSessionFold | null>(
       foldedRows.map((row) => [row.session.id, row.childFold]),
     );
-    const rows = treeRows.filter((row) => childFoldBySessionId.has(row.session.id));
+    const rows = orderedRows.filter((row) => childFoldBySessionId.has(row.session.id));
 
     // The project-level fold: the first few top-level conversations, each
     // counted together with its whole subtree so the cut never lands between a
@@ -279,11 +281,11 @@ export default function SidebarProjectSessions({
         0,
       ),
       foldedLiveCount: hiddenRows.filter((row) => liveSessionIds.has(row.session.id)).length,
-      foldedWaitingCount: hiddenRows.filter((row) => attentionSessionIds.has(row.session.id)).length,
+      foldedUnreadCount: hiddenRows.filter((row) => attentionSessionIds.has(row.session.id)).length,
     };
   }, [
-    spawnNesting, treeRows, activeSessions, attentionSessionIds, expandedParentIds,
-    selectedSessionId, sessionRenameId, currentTimeMs, isShowingAllSessions,
+    spawnNesting, treeRows, liveSessionIds, attentionSessionIds, expandedParentIds,
+    selectedSessionId, sessionRenameId, isShowingAllSessions,
   ]);
   const baseRows = spawnTree?.rows ?? treeRows;
   const childFoldBySessionId = spawnTree?.childFoldBySessionId ?? null;
@@ -560,6 +562,7 @@ export default function SidebarProjectSessions({
                     selectedSession={selectedSession}
                     isProcessing={isSessionRunning(session)}
                     hasBackgroundWork={backgroundSessionIds.has(session.id)}
+                    hasIdleProcess={idleProcessSessionIds.has(session.id)}
                     needsAttention={attentionSessionIds.has(session.id)}
                     currentTime={currentTime}
                     onRenameDraftChange={onRenameDraftChange}
@@ -603,7 +606,7 @@ export default function SidebarProjectSessions({
                   {t('sessions.showAllSessions', { hidden: spawnTree.foldedSessionCount, defaultValue: 'Show {{hidden}} more' })}
                   <FoldedSessionIndicators
                     foldedLiveCount={spawnTree.foldedLiveCount}
-                    foldedWaitingCount={spawnTree.foldedWaitingCount}
+                    foldedUnreadCount={spawnTree.foldedUnreadCount}
                     t={t}
                   />
                 </>

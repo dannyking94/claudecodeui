@@ -238,3 +238,21 @@ test('a secretary that died mid-turn reads as idle without waiting for the stale
     harness.tracker.stop();
   }
 });
+
+test('the working list the running poll reads follows the turn, including a secretary that died', async () => {
+  // The poll is the backstop for a client that missed a broadcast: it must list
+  // a secretary while it works and stop listing it the moment its claude exits.
+  const harness = createHarness({ lines: [...lastTurnEnd, ...wake, toolUse], mtimeSeconds: 3 });
+  try {
+    assert.deepEqual(harness.tracker.listWorkingSessions(), []);
+    await harness.tracker.noteTranscriptChanged('/p/sec-1.jsonl');
+    assert.deepEqual(harness.tracker.listWorkingSessions(), [{ appSessionId: 'app-sec-1', since: T0 }]);
+
+    harness.state.alive = false;
+    harness.state.nowSeconds = 8;
+    await harness.tracker.noteTranscriptChanged('/p/sec-1.jsonl');
+    assert.deepEqual(harness.tracker.listWorkingSessions(), []);
+  } finally {
+    harness.tracker.stop();
+  }
+});

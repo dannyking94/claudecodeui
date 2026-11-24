@@ -213,7 +213,7 @@ export const groupSessionsByRootProject = (
 
 /**
  * The fold a parent row carries for its own children. Present only on a row
- * that has children which are not working — the ones the arrow beside it hides
+ * that has children which are not live — the ones the arrow beside it hides
  * and reveals. A parent whose children are all working has nothing to fold and
  * no arrow.
  */
@@ -225,8 +225,8 @@ export type ChildSessionFold = {
    * child included. Zero while the parent is expanded.
    *
    * A plain count is the whole of what it reports, because everything folded
-   * is quiet by construction: a branch that is running or blocked on the user
-   * is never folded here. The sidebar's project-level fold is a different
+   * is not live by construction: a branch with a live session is never folded
+   * here. The sidebar's project-level fold is a different
    * control, it can still take a working row off screen, and it keeps its dots.
    */
   foldedCount: number;
@@ -243,101 +243,68 @@ export type SessionTreeRow = {
 export type FoldChildSessionsOptions = {
   /** Parents the user unfolded; every one of their children is rendered. */
   expandedParentIds?: ReadonlySet<string>;
-  /** Sessions running, or waiting on the user. */
+  /**
+   * Sessions that are live: a turn in flight, background work still running,
+   * or a process that is alive but idle at its prompt. Only these — and the
+   * pinned ones — keep a foldable child on screen.
+   */
   liveSessionIds?: ReadonlySet<string>;
-  /**
-   * Sessions blocked on the user — a permission prompt, a question. Normally
-   * also in `liveSessionIds`, but merged in here regardless, so that a session
-   * stopped at a dialog can never fold away quietly because a caller listed it
-   * in only one of the two sets.
-   */
-  waitingSessionIds?: ReadonlySet<string>;
-  /** Sessions that stay on screen whatever their activity — the open one. */
+  /** Sessions that stay on screen whatever their state — the open one, one being renamed. */
   pinnedSessionIds?: ReadonlySet<string>;
-  /**
-   * Timestamp from which recorded activity still counts as working, normally
-   * `now - RECENT_ACTIVITY_WINDOW_MS`.
-   *
-   * Left undefined, every child renders and nothing folds — without a clock to
-   * measure against there is no recency to read.
-   */
-  activeSince?: number;
   /**
    * Limits folding to the children this returns true for; every other child
    * always renders. The sidebar passes "was spawned by its parent", so a fork
-   * keeps the fork tree's own always-open default. Left undefined, any quiet
-   * child may fold.
+   * keeps the fork tree's own always-open default. Left undefined, any child
+   * that is not live may fold.
    */
   isFoldableChild?: (session: SessionWithProvider) => boolean;
 };
 
 /**
- * Renders the children that are working and folds every other one behind the
- * arrow on their parent's row.
+ * Renders the children that are live and folds every other one behind the
+ * arrow on their parent's row ("+N inactive").
  *
- * Resting is the default: a child earns its row by showing a signal the sidebar
- * actually observed, never by failing to prove it has finished. There is no
- * "done" here to key on — a session that completes its task does not exit, it
- * sits at its prompt looking exactly like one that is thinking — so the rule is
- * turned around and every visible row is positive evidence of work:
+ * Live means something is actually running, as reported by the server's
+ * running-sessions poll — never that the transcript was written recently:
  *
- * - **Running.** The session is in cloudcli's run registry: a turn is in flight
- *   right now.
- * - **Waiting on the user.** Stopped at a permission dialog or a question. It
- *   is not streaming and its transcript may not have moved for an hour, but it
- *   is the row the user most needs to reach, so it counts as working.
- * - **Recently active.** Its transcript was written to within the window the
- *   caller passes as `activeSince`. This is what covers a session cloudcli did
- *   not launch — a worker driven from a terminal is never in the run registry,
- *   but the file watcher syncs its `lastActivity` within seconds of every
- *   message it writes.
- * - **Open.** Not evidence of work, but folding the row the user is reading
- *   would be its own bug.
+ * - **Running.** A turn is in flight (a CloudCLI chat run, or a Claude CLI
+ *   process whose registry entry says busy).
+ * - **Background work.** The turn ended but agents or commands it started
+ *   still run.
+ * - **Process open.** A Claude CLI process is alive but idle at its prompt —
+ *   a worker that reported and has not been stopped yet.
+ * - **Open in the sidebar.** Not evidence of work, but folding the row the
+ *   user is reading would be its own bug.
  *
- * A branch is judged as a whole: a quiet parent holding a working grandchild
- * renders, because the working row cannot be drawn without it.
+ * A worker that was stopped therefore folds the moment its process exits,
+ * however recently it wrote; recency used to keep such rows up for ten
+ * minutes, and the "needs attention" (unread) flag kept them up until opened.
  *
- * There is no cap on the working rows. The owner asked for the active workers
- * on screen and the rest folded, all of them — not "three, then show N more"
- * at the bottom of a list long enough that the toggle scrolls out of reach.
- * That is also why the control is the parent's own row rather than a row
- * after its children: it stays where the eye already is however many children
- * there are.
+ * A branch is judged as a whole: a parent that is not live but holds a live
+ * grandchild renders, because the live row cannot be drawn without it.
  *
- * Nothing is hidden. Everything folded is counted on the parent's fold, and
- * folding is recomputed from the sessions handed in each time — so a child
- * that goes quiet folds, and one that writes a message, starts a turn or hits
- * a permission prompt is on screen again at the next render, with no state to
- * invalidate.
+ * There is no cap on the live rows, and the control is the parent's own row,
+ * so it stays where the eye already is however many children there are.
+ *
+ * Nothing is hidden for good. Everything folded is counted on the parent's
+ * fold, and folding is recomputed from the sets handed in each time, so a
+ * child that starts a turn is on screen again at the next poll.
  *
  * This is a display filter, applied to the flattened tree on its way to the
- * renderer rather than inside the tree builder: everything else reading the
- * tree — session counts, id lookups, the project-level fold — still sees every
- * loaded session, and nothing here can make a row unreachable.
- *
+ * renderer: everything else reading the tree still sees every loaded session.
  * A row's parent is read from the depths in the flattened list — the nearest
- * row above it one level shallower — which keeps this in step with what is
- * actually drawn and makes folding a child fold its descendants with it.
+ * row above it one level shallower — so folding a child folds its descendants.
  */
 export const foldChildSessions = (
   orderedSessions: SessionWithProvider[],
   options: FoldChildSessionsOptions = {},
 ): SessionTreeRow[] => {
   const {
-    activeSince,
     expandedParentIds,
     liveSessionIds,
-    waitingSessionIds,
     pinnedSessionIds,
     isFoldableChild,
   } = options;
-
-  // Everything that is running or blocked, whichever set the caller put it in.
-  const liveOrWaitingSessionIds = !waitingSessionIds?.size
-    ? liveSessionIds
-    : !liveSessionIds?.size
-      ? waitingSessionIds
-      : new Set([...liveSessionIds, ...waitingSessionIds]);
 
   const depths = orderedSessions.map((session) => Math.max(Math.trunc(session.__depth ?? 0), 0));
 
@@ -392,38 +359,13 @@ export const foldChildSessions = (
     return false;
   };
 
-  /**
-   * The freshest activity anywhere in a branch. Read across the whole subtree
-   * so a quiet parent is kept on screen by a child that is still writing —
-   * otherwise the working row would have nothing to hang from.
-   */
-  const readBranchActivityTime = (index: number): number => {
-    let latestActivityTime = 0;
-    for (let cursor = index; cursor < subtreeEndIndexes[index]; cursor += 1) {
-      latestActivityTime = Math.max(latestActivityTime, readActivityTime(orderedSessions[cursor]));
-    }
-
-    return latestActivityTime;
-  };
-
-  /**
-   * Whether a branch has shown any of the signals that earn a row. Every one of
-   * them is something observed — a run in the registry, a prompt waiting on the
-   * user, a message written, the session being open — never an inference that
-   * the work behind a quiet session is over.
-   */
+  /** Whether a branch must stay on screen: it is not foldable, or something in it is live or pinned. */
   const isWorkingBranch = (index: number): boolean => {
     if (isFoldableChild && !isFoldableChild(orderedSessions[index])) {
       return true;
     }
 
-    if (subtreeContains(index, pinnedSessionIds) || subtreeContains(index, liveOrWaitingSessionIds)) {
-      return true;
-    }
-
-    // No clock to measure against: render every child rather than folding on a
-    // recency nobody supplied.
-    return activeSince === undefined || readBranchActivityTime(index) >= activeSince;
+    return subtreeContains(index, pinnedSessionIds) || subtreeContains(index, liveSessionIds);
   };
 
   const rows: SessionTreeRow[] = [];
@@ -444,8 +386,8 @@ export const foldChildSessions = (
     const workingChildIndexes = childIndexes.filter(isWorkingBranch);
     const isFoldable = workingChildIndexes.length < childIndexes.length;
     // Expanding is sticky for as long as the sidebar keeps the parent in its
-    // set: nothing re-folds under someone who is reading it, not a child going
-    // quiet, not the clock passing the recency window.
+    // set: nothing re-folds under someone who is reading it, not even a child
+    // whose process exits.
     const isExpanded = isFoldable
       && (expandedParentIds?.has(readSessionId(orderedSessions[index])) ?? false);
     const visibleChildIndexes = isExpanded ? childIndexes : workingChildIndexes;
@@ -474,4 +416,81 @@ export const foldChildSessions = (
   }
 
   return rows;
+};
+
+/** One row of a flattened tree, as `orderRootsByOwnActivity` reads it. */
+type DepthTaggedRow = {
+  depth: number;
+  session: SessionWithProvider;
+};
+
+export type OrderRootsOptions = {
+  /** Sessions with a turn, background work or an idle process alive. */
+  liveSessionIds?: ReadonlySet<string>;
+  /** Which descendants fold when not live; see `FoldChildSessionsOptions`. */
+  isFoldableChild?: (session: SessionWithProvider) => boolean;
+};
+
+/**
+ * Re-orders a flattened tree's top-level conversations by the activity the
+ * user can actually see, keeping each subtree together and in its own order.
+ *
+ * The fork-tree builder ranks a family by its newest member. That is right
+ * for a fork tree, whose rows all render, but wrong once spawned children
+ * fold: a six-day-old "deprecated" secretary whose 25 stopped workers wrote
+ * an hour ago would hold one of the project's three visible places, while
+ * every one of the sessions that put it there sits behind its "+25 inactive".
+ *
+ * A root is ranked by the newest activity among the rows that stay drawn
+ * whatever the fold state: its own, its forks' (which never fold) and its live
+ * descendants'. A foldable descendant that is not live does not count, and
+ * neither does whether the user has unfolded it, so opening a fold never
+ * reorders the list. Liveness lends a row its recorded activity, not "now": a
+ * root does not jump to the top when a turn starts and back when it ends.
+ * Roots with equal rank keep the order they arrived in.
+ */
+export const orderRootsByOwnActivity = <Row extends DepthTaggedRow>(
+  rows: Row[],
+  { liveSessionIds, isFoldableChild }: OrderRootsOptions,
+): Row[] => {
+  type RootBlock = { rows: Row[]; rank: number; position: number };
+  const blocks: RootBlock[] = [];
+  // Depth of the shallowest foldable, non-live ancestor on the current path:
+  // everything under it is folded unless live, so it adds no visible activity.
+  let foldedBelowDepth = Infinity;
+
+  for (const row of rows) {
+    const depth = Math.max(Math.trunc(row.depth), 0);
+    if (depth === 0 || blocks.length === 0) {
+      blocks.push({ rows: [], rank: 0, position: blocks.length });
+      foldedBelowDepth = Infinity;
+    }
+
+    const block = blocks[blocks.length - 1];
+    block.rows.push(row);
+
+    if (depth <= foldedBelowDepth) {
+      foldedBelowDepth = Infinity;
+    }
+
+    if (liveSessionIds?.has(readSessionId(row.session))) {
+      block.rank = Math.max(block.rank, readActivityTime(row.session));
+      continue;
+    }
+
+    if (depth > foldedBelowDepth) {
+      continue;
+    }
+
+    if (depth > 0 && (!isFoldableChild || isFoldableChild(row.session))) {
+      foldedBelowDepth = depth;
+      continue;
+    }
+
+    block.rank = Math.max(block.rank, readActivityTime(row.session));
+  }
+
+  return blocks
+    .sort((left, right) => right.rank - left.rank || left.position - right.position)
+    .flatMap((block) => block.rows);
 };

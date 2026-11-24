@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useState,
 } from 'react';
 import type { ReactNode } from 'react';
 
@@ -20,13 +21,24 @@ type RunningSessionApiItem = {
   canInterrupt?: unknown;
   background?: unknown;
   tasks?: unknown;
+  external?: unknown;
 };
 
 type RunningSessionsApiPayload = {
   data?: {
     sessions?: RunningSessionApiItem[];
+    idleProcessSessionIds?: unknown;
+    includesExternalActivity?: unknown;
   };
 };
+
+/**
+ * How often the open app re-reads which sessions are live. It is what turns a
+ * worker that exited, a turn that ended in a terminal, or a secretary whose
+ * idle broadcast this client missed into the right row state without a
+ * reload. Paused while the page is hidden; a page coming back reads at once.
+ */
+const RUNNING_SESSIONS_POLL_MS = 5000;
 
 type SessionProtectionActions = {
   markSessionProcessing: MarkSessionProcessing;
@@ -41,6 +53,14 @@ const SessionProtectionStateContext = createContext<SessionActivityMap | null>(n
 const SessionProtectionActionsContext = createContext<SessionProtectionActions | null>(null);
 const BusySessionIdsContext = createContext<ReadonlySet<string> | null>(null);
 const BackgroundSessionIdsContext = createContext<ReadonlySet<string> | null>(null);
+const IdleProcessSessionIdsContext = createContext<ReadonlySet<string> | null>(null);
+const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set();
+
+/** The poll's idle-process ids, sorted and joined so an unchanged set keeps its identity. */
+const readIdleProcessMembershipKey = (value: unknown): string =>
+  Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === 'string' && id.length > 0).sort().join('\u0000')
+    : '';
 
 /**
  * The set of session ids whose activity passes `include`, with a stable
@@ -131,6 +151,7 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
     isSessionProcessing,
     getSessionActivity,
   } = useSessionProtection();
+  const [idleProcessMembershipKey, setIdleProcessMembershipKey] = useState('');
 
   const refreshRunningSessions = useCallback(async () => {
     try {
@@ -141,6 +162,7 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
 
       const payload = (await response.json()) as RunningSessionsApiPayload;
       const sessions = Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
+      setIdleProcessMembershipKey(readIdleProcessMembershipKey(payload.data?.idleProcessSessionIds));
 
       syncProcessingSessions(
         sessions
@@ -156,9 +178,11 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
               canInterrupt: typeof session.canInterrupt === 'boolean' ? session.canInterrupt : undefined,
               background: session.background === true,
               tasks: parseBackgroundTasks(session.tasks),
+              ...(session.external === true ? { external: true } : {}),
             };
           })
           .filter((session): session is NonNullable<typeof session> => Boolean(session)),
+        { includesExternalActivity: payload.data?.includesExternalActivity === true },
       );
     } catch (error) {
       console.error('[SessionProtection] Failed to sync running sessions:', error);
@@ -166,15 +190,42 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
   }, [syncProcessingSessions]);
 
   useEffect(() => {
-    void refreshRunningSessions();
-  }, [refreshRunningSessions]);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
+    let interval: number | null = null;
+    const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    const stop = () => {
+      if (interval !== null) {
+        window.clearInterval(interval);
+        interval = null;
+      }
+    };
+    const start = () => {
+      stop();
       void refreshRunningSessions();
-    }, 5000);
+      interval = window.setInterval(() => {
+        void refreshRunningSessions();
+      }, RUNNING_SESSIONS_POLL_MS);
+    };
+    // A hidden tab stops asking; one shown again (an iPhone tab brought back,
+    // a laptop woken) reads at once rather than showing what it saw before.
+    const onVisibilityChange = () => (isHidden() ? stop() : start());
+    const onWake = () => {
+      if (!isHidden()) {
+        void refreshRunningSessions();
+      }
+    };
 
-    return () => window.clearInterval(interval);
+    if (!isHidden()) {
+      start();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onWake);
+    window.addEventListener('online', onWake);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onWake);
+      window.removeEventListener('online', onWake);
+    };
   }, [refreshRunningSessions]);
 
   const actions = useMemo<SessionProtectionActions>(
@@ -198,14 +249,20 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
 
   const busySessionIds = useSessionIdSet(processingSessions, isAnyActivity);
   const backgroundSessionIds = useSessionIdSet(processingSessions, isBackgroundOnly);
+  const idleProcessSessionIds = useMemo<ReadonlySet<string>>(
+    () => new Set(idleProcessMembershipKey ? idleProcessMembershipKey.split('\u0000') : []),
+    [idleProcessMembershipKey],
+  );
 
   return (
     <SessionProtectionActionsContext.Provider value={actions}>
       <BusySessionIdsContext.Provider value={busySessionIds}>
         <BackgroundSessionIdsContext.Provider value={backgroundSessionIds}>
-          <SessionProtectionStateContext.Provider value={processingSessions}>
-            {children}
-          </SessionProtectionStateContext.Provider>
+          <IdleProcessSessionIdsContext.Provider value={idleProcessSessionIds}>
+            <SessionProtectionStateContext.Provider value={processingSessions}>
+              {children}
+            </SessionProtectionStateContext.Provider>
+          </IdleProcessSessionIdsContext.Provider>
         </BackgroundSessionIdsContext.Provider>
       </BusySessionIdsContext.Provider>
     </SessionProtectionActionsContext.Provider>
@@ -236,6 +293,18 @@ export function useBackgroundSessionIdSet(): ReadonlySet<string> {
     throw new Error('useBackgroundSessionIdSet must be used within SessionProtectionProvider');
   }
   return backgroundSessionIds;
+}
+
+/**
+ * Sessions whose Claude CLI process is alive but idle at its prompt — a worker
+ * that finished its turn and has not been stopped. Disjoint from the busy set.
+ * Used by the sidebar module to keep such rows on screen and mark them live.
+ *
+ * Unlike the hooks above it tolerates a missing provider (an empty set), so a
+ * sidebar list rendered on its own, as in tests, needs no provider around it.
+ */
+export function useIdleProcessSessionIdSet(): ReadonlySet<string> {
+  return useContext(IdleProcessSessionIdsContext) ?? EMPTY_SESSION_ID_SET;
 }
 
 export function useProcessingSessions(): SessionActivityMap {

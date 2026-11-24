@@ -270,6 +270,14 @@ export type GetSessionActivity = (sessionId: string) => SessionActivity | undefi
 /** Replaces the whole processing map with the server's view, used by the periodic running-sessions poll. */
 export type SyncProcessingSessions = (
   sessions: readonly SessionActivitySnapshot[],
+  options?: {
+    /**
+     * The server lists external (secretary) activity among `sessions`, so an
+     * external entry it no longer lists is over and is dropped. Without it an
+     * external entry is only ever ended by its own `session_activity` event.
+     */
+    includesExternalActivity?: boolean;
+  },
 ) => void;
 
 /** Reports whether one session is currently producing a response in a run this app owns; false for one that only has background tasks running, or that another process is working on. */
@@ -284,6 +292,8 @@ export type SessionActivitySnapshot = {
   /** True when the server lists the session for its background tasks alone, with no chat run. */
   background?: boolean;
   tasks?: BackgroundTaskSummary[];
+  /** True for a registered secretary's own turn: shown as running, but nothing here to stop. */
+  external?: boolean;
 };
 
 // ---------------------------

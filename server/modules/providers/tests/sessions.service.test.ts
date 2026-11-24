@@ -535,3 +535,52 @@ test('nesting under an unknown parent reports a missing session', { concurrency:
     );
   });
 });
+
+test('the liveness snapshot tells an idle process from an exited one, from one registry scan', { concurrency: false }, async () => {
+  // The sidebar folds a worker the moment its process is gone. An idle one at
+  // its prompt is reported apart from the running ones; an exited one nowhere.
+  await withIsolatedDatabase(async () => {
+    for (const [appId, nativeId] of [['idle-app', 'native-idle'], ['gone-app', 'native-gone'], ['busy-app', 'native-busy']]) {
+      sessionsDb.createAppSession(appId, 'claude', '/tmp/running-project');
+      sessionsDb.assignProviderSessionId(appId, nativeId);
+    }
+
+    await withClaudeCliRegistry(
+      [
+        { pid: process.pid, sessionId: 'native-idle', status: 'idle', startedAt: 1_000 },
+        { pid: 4_194_302, sessionId: 'native-gone', status: 'idle', startedAt: 2_000 },
+        { pid: process.ppid, sessionId: 'native-busy', status: 'busy', startedAt: 3_000 },
+      ],
+      async () => await withProviders(
+        { claude: { run: async () => undefined, abort: () => false } },
+        async () => {
+          const snapshot = await sessionsService.readSessionLiveness();
+          assert.deepEqual(snapshot.sessions.map((session) => session.sessionId), ['busy-app']);
+          assert.deepEqual(snapshot.idleProcessSessionIds, ['idle-app']);
+          assert.equal(snapshot.includesExternalActivity, true);
+        },
+      ),
+    );
+  });
+});
+
+test('the liveness snapshot lists a mid-turn secretary as external activity', { concurrency: false }, async () => {
+  const { claudeSecretaryActivity } = await import('@/modules/providers/list/claude/claude-secretary-activity.provider.js');
+  const realList = claudeSecretaryActivity.listWorkingSessions;
+  claudeSecretaryActivity.listWorkingSessions = () => [{ appSessionId: 'secretary-app', since: 7_000 }];
+  try {
+    await withIsolatedDatabase(async () => {
+      await withClaudeCliRegistry([], async () => await withProviders(
+        { claude: { run: async () => undefined, abort: () => false } },
+        async () => {
+          const snapshot = await sessionsService.readSessionLiveness();
+          assert.deepEqual(snapshot.sessions, [{
+            sessionId: 'secretary-app', provider: 'claude', startedAt: 7_000, lastSeq: 0, canInterrupt: false, external: true,
+          }]);
+        },
+      ));
+    });
+  } finally {
+    claudeSecretaryActivity.listWorkingSessions = realList;
+  }
+});

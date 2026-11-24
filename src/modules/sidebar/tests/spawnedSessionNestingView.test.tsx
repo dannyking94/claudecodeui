@@ -22,9 +22,11 @@ const noop = () => {};
 const NOW = new Date('2026-10-18T12:00:00Z');
 const minutesAgo = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000).toISOString();
 
-// A secretary (claude) with two workers it spawned — one still writing, one at
-// rest — plus a fork of the secretary and an unrelated conversation. The worker
-// runs on another provider than its parent, which a fork never does.
+// A secretary (claude) with two workers it spawned — one running, one stopped —
+// plus a fork of the secretary and an unrelated conversation. The worker runs
+// on another provider than its parent, which a fork never does. Only `busy` is
+// live (in `activeSessions`): folding reads liveness, never how recently a
+// transcript was written.
 const secretary: SessionWithProvider = { id: 'secretary', summary: 'Secretary', __provider: 'claude', lastActivity: minutesAgo(1) };
 const busyWorker: SessionWithProvider = { id: 'busy', summary: 'Busy worker', __provider: 'codex', parentSessionId: 'secretary', lastActivity: minutesAgo(2) };
 const quietWorker: SessionWithProvider = { id: 'quiet', summary: 'Quiet worker', __provider: 'claude', parentSessionId: 'secretary', lastActivity: minutesAgo(300) };
@@ -36,7 +38,7 @@ const props = (overrides: Partial<ComponentProps<typeof SidebarProjectSessions>>
   project: { projectId: 'project', displayName: 'Project', fullPath: '/workspace/project' },
   isExpanded: true, sessions, selectedSession: null, initialSessionsLoaded: true,
   hasMoreSessions: false, isLoadingMoreSessions: false,
-  activeSessions: new Set(), backgroundSessionIds: new Set(), attentionSessionIds: new Set(),
+  activeSessions: new Set(['busy']), backgroundSessionIds: new Set(), attentionSessionIds: new Set(),
   currentTime: NOW, sessionRenameId: null, sessionRenameDraft: '',
   onRenameDraftChange: noop, onStartEditingSession: noop, onCancelEditingSession: noop,
   onSaveEditingSession: noop, onProjectSelect: noop, onSessionSelect: noop, onArchiveSession: noop, onDeleteSession: noop,
@@ -70,17 +72,30 @@ test('a working spawned session shows under its parent, a quiet one folds behind
   expect(rowIds(container)).toEqual(['secretary', 'busy', 'fork', 'other']);
 });
 
-test('a quiet spawned session never folds while it runs, waits on the user, or is open', () => {
-  const running = render(<SidebarProjectSessions {...props({ activeSessions: new Set(['quiet']) })} />);
+test('a spawned session stays on screen while it runs, has background work, or is open', () => {
+  const running = render(<SidebarProjectSessions {...props({ activeSessions: new Set(['busy', 'quiet']) })} />);
   expect(rowIds(running.container)).toContain('quiet');
   running.unmount();
 
-  const waiting = render(<SidebarProjectSessions {...props({ attentionSessionIds: new Set(['quiet']) })} />);
-  expect(rowIds(waiting.container)).toContain('quiet');
-  waiting.unmount();
+  const background = render(<SidebarProjectSessions {...props({ activeSessions: new Set(['busy', 'quiet']), backgroundSessionIds: new Set(['quiet']) })} />);
+  expect(rowIds(background.container)).toContain('quiet');
+  background.unmount();
 
   const open = render(<SidebarProjectSessions {...props({ selectedSession: quietWorker })} />);
   expect(rowIds(open.container)).toContain('quiet');
+});
+
+test('a stopped worker folds however recently it wrote, and unread does not keep it up', () => {
+  // The owner's screenshot: a worker that reported a minute ago and was stopped
+  // still had a dot and its own row. Not live means folded.
+  const justStopped: SessionWithProvider = { ...quietWorker, lastActivity: minutesAgo(1) };
+  const { container } = render(<SidebarProjectSessions {...props({
+    sessions: [secretary, busyWorker, justStopped, fork, other],
+    attentionSessionIds: new Set(['quiet']),
+  })} />);
+
+  expect(rowIds(container)).toEqual(['secretary', 'busy', 'fork', 'other']);
+  expect(row(container, 'secretary').querySelector('[data-folded-children]')?.textContent).toBe('sessions.foldedIdleChildren 1');
 });
 
 test('a spawned session opens in the project it runs in, not the group it is shown under', () => {
@@ -99,7 +114,7 @@ test('a project shows three top-level conversations and folds the rest behind "s
     id: `root-${index + 1}`, summary: `Root ${index + 1}`, __provider: 'claude', lastActivity: minutesAgo(index + 1),
   }));
   const child: SessionWithProvider = { id: 'child', summary: 'Child', __provider: 'claude', parentSessionId: 'root-1', lastActivity: minutesAgo(1) };
-  const { container } = render(<SidebarProjectSessions {...props({ sessions: [...roots, child], hasMoreSessions: true })} />);
+  const { container } = render(<SidebarProjectSessions {...props({ sessions: [...roots, child], hasMoreSessions: true, activeSessions: new Set(['child']) })} />);
 
   // Each top-level conversation is counted with its subtree.
   expect(rowIds(container)).toEqual(['root-1', 'child', 'root-2', 'root-3']);

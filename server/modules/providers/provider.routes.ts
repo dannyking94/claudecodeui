@@ -952,8 +952,7 @@ router.post(
 router.get(
   '/sessions/running',
   asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = await sessionsService.listRunningSessions();
-    res.json(createApiSuccessResponse({ sessions }));
+    res.json(createApiSuccessResponse(await sessionsService.readSessionLiveness()));
   }),
 );
 

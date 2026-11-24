@@ -86,3 +86,80 @@ test('one task entry in a shape the client does not read hides only itself', asy
   await waitFor(() => assert.ok(result.current.get('held-session')));
   assert.deepEqual(result.current.get('held-session')?.tasks?.map((task) => task.taskId), ['w1']);
 });
+
+//----------------- LIVENESS WITHOUT A RELOAD ------------
+// The owner's 2026-11-24 report: a secretary's process had exited, yet its row
+// looked active until the page was reloaded. These drive the poll by `focus` and
+// `visibilitychange` rather than waiting out its five seconds.
+
+const payload = (data: Record<string, unknown>) => ({ ok: true, json: async () => ({ data }) });
+
+const renderLiveness = async () => {
+  const context = await import('@/shared/context/SessionProtectionContext');
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(context.SessionProtectionProvider, null, children);
+  return renderHook(() => ({
+    busy: context.useBusySessionIdSet(),
+    idleProcess: context.useIdleProcessSessionIdSet(),
+    actions: context.useSessionProtectionActions(),
+  }), { wrapper });
+};
+
+const setVisibility = (state: 'visible' | 'hidden') => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  document.dispatchEvent(new Event('visibilitychange'));
+};
+
+test('a process that exits leaves the idle-process set on the next poll, with no reload', async () => {
+  runningSessions.mockResolvedValue(payload({ sessions: [], idleProcessSessionIds: ['worker'], includesExternalActivity: true }));
+  const { result } = await renderLiveness();
+  await waitFor(() => assert.equal(result.current.idleProcess.has('worker'), true));
+
+  runningSessions.mockResolvedValue(payload({ sessions: [], idleProcessSessionIds: [], includesExternalActivity: true }));
+  window.dispatchEvent(new Event('focus'));
+  await waitFor(() => assert.equal(result.current.idleProcess.has('worker'), false));
+});
+
+test('a secretary whose idle broadcast was missed stops spinning once the poll stops listing it', async () => {
+  runningSessions.mockResolvedValue(payload({
+    sessions: [{ sessionId: 'secretary', startedAt: 1_000, canInterrupt: false, external: true }],
+    idleProcessSessionIds: [],
+    includesExternalActivity: true,
+  }));
+  const { result } = await renderLiveness();
+  await waitFor(() => assert.equal(result.current.busy.has('secretary'), true));
+
+  runningSessions.mockResolvedValue(payload({ sessions: [], idleProcessSessionIds: [], includesExternalActivity: true }));
+  window.dispatchEvent(new Event('focus'));
+  await waitFor(() => assert.equal(result.current.busy.has('secretary'), false));
+});
+
+test('an older server that never lists external activity cannot end it', async () => {
+  runningSessions.mockResolvedValue(payload({ sessions: [] }));
+  const { result } = await renderLiveness();
+  await waitFor(() => assert.equal(runningSessions.mock.calls.length > 0, true));
+
+  result.current.actions.markSessionProcessing('secretary', { external: true, startedAt: 1_000 });
+  await waitFor(() => assert.equal(result.current.busy.has('secretary'), true));
+  const callsBefore = runningSessions.mock.calls.length;
+  window.dispatchEvent(new Event('focus'));
+  await waitFor(() => assert.equal(runningSessions.mock.calls.length > callsBefore, true));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(result.current.busy.has('secretary'), true);
+});
+
+test('a hidden page does not poll, and reads at once when shown again', async () => {
+  setVisibility('hidden');
+  try {
+    runningSessions.mockResolvedValue(payload({ sessions: [], idleProcessSessionIds: ['worker'], includesExternalActivity: true }));
+    const { result } = await renderLiveness();
+    window.dispatchEvent(new Event('focus'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(runningSessions.mock.calls.length, 0);
+
+    setVisibility('visible');
+    await waitFor(() => assert.equal(result.current.idleProcess.has('worker'), true));
+  } finally {
+    setVisibility('visible');
+  }
+});

@@ -449,6 +449,19 @@ export function createClaudeSecretaryActivityTracker(overrides: Partial<Secretar
       return null;
     },
 
+    /**
+     * Every tracked secretary that is mid-turn right now, by app session id.
+     * Consumed by the sessions service for the running-sessions poll, so a
+     * client that missed the idle `session_activity` broadcast (a socket that
+     * reconnected, a phone tab asleep) still learns within one poll that the
+     * turn is over — and one that missed the working broadcast learns it began.
+     */
+    listWorkingSessions(): Array<{ appSessionId: string; since: number | null }> {
+      return [...tracked.values()]
+        .filter((entry) => entry.activity.working)
+        .map((entry) => ({ appSessionId: entry.appSessionId, since: entry.activity.since }));
+    },
+
     /** Stops every poll timer. Consumed by tests and server shutdown. */
     stop(): void {
       for (const entry of tracked.values()) {

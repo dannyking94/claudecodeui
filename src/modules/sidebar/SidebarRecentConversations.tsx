@@ -184,19 +184,18 @@ export default function SidebarRecentConversations({
           return (
             <div key={conversation.sessionId} className="group relative">
               {/*
-                * Only the amber "needs attention" dot, and the spinner below. The
-                * Projects row also has a green dot for a session touched recently,
-                * which carries no information in a list ordered by recency.
+                * Only the amber "unread" dot (new activity since it was last
+                * opened), and the spinner below.
                 */}
               {showAttentionIndicator && (
                 <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
                   <Tooltip
-                    content={t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })}
+                    content={t('tooltips.unreadActivityIndicator', { defaultValue: 'New activity since you last opened it' })}
                     position="right"
                   >
                     <div
                       role="status"
-                      aria-label={t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })}
+                      aria-label={t('tooltips.unreadActivityIndicator', { defaultValue: 'New activity since you last opened it' })}
                       className="h-2 w-2 animate-pulse rounded-full bg-amber-500"
                     />
                   </Tooltip>

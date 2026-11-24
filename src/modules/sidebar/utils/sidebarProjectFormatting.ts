@@ -11,7 +11,6 @@ import type {
 
 // Presentation data the sidebar derives from a session before rendering its row.
 type SessionViewModel = {
-  isActive: boolean;
   sessionName: string;
   sessionTime: string;
   messageCount: number;
@@ -140,24 +139,12 @@ const getSessionTime = (session: SessionWithProvider): string => {
   return getUpdatedTimestamp(session) || getCreatedTimestamp(session);
 };
 
-/**
- * How long after its last recorded activity a session still reads as active.
- *
- * This is the window behind the green dot on a sidebar row, tooltipped
- * "Recently active session (last 10 minutes)", and it is exported so anything
- * else judging recency measures the same thing the user is already being told.
- */
-export const RECENT_ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
-
 export const createSessionViewModel = (
   session: SessionWithProvider,
   currentTime: Date,
   t: TFunction,
 ): SessionViewModel => {
-  const sessionDate = getSessionDate(session);
-
   return {
-    isActive: currentTime.getTime() - sessionDate.getTime() < RECENT_ACTIVITY_WINDOW_MS,
     sessionName: getSessionName(session, t),
     sessionTime: getSessionTime(session),
     messageCount: Number(session.messageCount || 0),
