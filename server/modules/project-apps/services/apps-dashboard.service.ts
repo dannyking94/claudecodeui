@@ -42,6 +42,15 @@ const asNumberOrNull = (value: unknown): number | null => (typeof value === 'num
 const asStringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 const asRecord = (value: unknown): RawRecord => (value && typeof value === 'object' && !Array.isArray(value) ? value as RawRecord : {});
 
+/** `also_in_projects`: absolute paths only, trailing slashes trimmed, duplicates dropped. */
+function readAlsoInProjects(value: unknown): string[] {
+  const paths = asStringArray(value)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.startsWith('/'))
+    .map((entry) => entry.replace(/\/+$/, '') || '/');
+  return [...new Set(paths)];
+}
+
 function readCommands(value: unknown): Record<string, string[]> {
   const commands: Record<string, string[]> = {};
   for (const [name, argv] of Object.entries(asRecord(value))) {
@@ -80,6 +89,7 @@ function fromRegistryEntry(entry: RawRecord): ProjectAppRecord {
     git: null,
     commands: readCommands(entry.commands),
     missingScripts: [],
+    alsoInProjects: readAlsoInProjects(entry.also_in_projects),
   };
 }
 

@@ -66,3 +66,23 @@ test('selectProjectApps keeps only the apps whose home is the requested project'
   // The parent folder project gets none of them: each has a more specific home.
   assert.deepEqual(selectProjectApps(apps, '/work', PROJECTS), []);
 });
+
+test('selectProjectApps adds apps that list the project in alsoInProjects, without moving their owner', () => {
+  const apps = [
+    { ...app({ id: 'a' }), alsoInProjects: ['/work/secretary-a/'] },
+    // Owned nowhere, but still shown where it asks to be.
+    { ...app({ id: 'orphan', repo: '/srv/x', workdir: '/srv/x' }), alsoInProjects: ['/work/secretary-a'] },
+    // Its own project in the list is no reason to tag it `also`.
+    { ...app({ id: 'self' }), alsoInProjects: ['/work/robot-repo'] },
+    // Other entries match nothing: a prefix, a relative path, an unrelated project.
+    { ...app({ id: 'b', repo: '/work/webui', workdir: '/work/webui' }), alsoInProjects: ['/work/secretary', 'secretary-a', '/elsewhere'] },
+  ];
+  assert.deepEqual(
+    selectProjectApps(apps, '/work/secretary-a', PROJECTS).map((a) => [a.id, a.matchedBy, a.ownerProjectPath]),
+    [['a', 'also', '/work/robot-repo'], ['orphan', 'also', null]],
+  );
+  assert.deepEqual(
+    selectProjectApps(apps, '/work/robot-repo', PROJECTS).map((a) => [a.id, a.matchedBy]),
+    [['a', 'path'], ['self', 'path']],
+  );
+});

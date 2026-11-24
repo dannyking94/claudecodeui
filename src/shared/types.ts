@@ -2132,8 +2132,25 @@ export type ProjectApp = {
   git: { branch: string | null; head: string | null; stale: boolean; reasons: string[] } | null;
   commands: Record<string, string[]>;
   missingScripts: string[];
-  /** Whether the app was placed here by its paths or, failing that, by its `started_by`. */
-  matchedBy: 'path' | 'started-by';
+  /** Further project paths the registry lists the app under (`also_in_projects`); never its owner. */
+  alsoInProjects: string[];
+  /**
+   * Whether the app was placed here by its paths, failing that by its
+   * `started_by`, or (`also`) only because this project is in its `also_in_projects`.
+   */
+  matchedBy: 'path' | 'started-by' | 'also';
+  /**
+   * For an `also` app, the project that owns it, so the card can link there;
+   * null otherwise (or when no known project owns it). Absent in the all-projects view.
+   */
+  ownerProject?: ProjectAppOwnerRef | null;
+};
+
+/** The owning project of an app shown elsewhere via `also_in_projects`. */
+export type ProjectAppOwnerRef = {
+  projectId: string;
+  projectPath: string;
+  displayName: string;
 };
 
 /** An unregistered address an agent wrote in one of the project's chats, grouped by origin. */

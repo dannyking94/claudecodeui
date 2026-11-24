@@ -2053,6 +2053,12 @@ export type ProjectAppRecord = {
   git: { branch: string | null; head: string | null; stale: boolean; reasons: string[] } | null;
   commands: Record<string, string[]>;
   missingScripts: string[];
+  /**
+   * Absolute paths of further projects the app is also listed under (the
+   * registry's `also_in_projects`), trailing slashes trimmed; non-absolute or
+   * non-string values are dropped. Never changes the owning project.
+   */
+  alsoInProjects: string[];
 };
 
 /**
@@ -2095,10 +2101,23 @@ export type ProjectChatLink = {
 
 /**
  * How an app was assigned to the project it is shown under: by one of its
- * paths lying inside the project, or (when no project path matches) by the
- * project named in its `started_by` field.
+ * paths lying inside the project, (when no project path matches) by the
+ * project named in its `started_by` field, or — `also` — because the project
+ * is listed in its `also_in_projects` while another project owns it. `also`
+ * only ever appears in a per-project view; ownership is decided by the first two.
  */
-export type ProjectAppMatch = 'path' | 'started-by';
+export type ProjectAppMatch = 'path' | 'started-by' | 'also';
+
+/**
+ * One app in a per-project Apps view. `ownerProject` names the owning
+ * project when the app is shown here only via `also_in_projects`
+ * (`matchedBy: 'also'`), so the card can link there; it is null otherwise, and
+ * also null for an `also` app no known project owns.
+ */
+export type ProjectAppInView = ProjectAppRecord & {
+  matchedBy: ProjectAppMatch;
+  ownerProject: ProjectAppsProjectRef | null;
+};
 
 /** The Apps tab payload for one project. */
 export type ProjectAppsView = {
@@ -2106,7 +2125,7 @@ export type ProjectAppsView = {
   source: ProjectAppsSource;
   checkedAt: number;
   error: string | null;
-  apps: Array<ProjectAppRecord & { matchedBy: ProjectAppMatch }>;
+  apps: ProjectAppInView[];
   chatLinks: ProjectChatLink[];
 };
 

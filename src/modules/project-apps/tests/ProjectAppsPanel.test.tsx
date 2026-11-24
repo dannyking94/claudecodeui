@@ -36,7 +36,7 @@ const app = (overrides: Partial<ProjectApp>): ProjectApp => ({
   controls: 'full', controlsReason: 'own script', startedBy: 'secretary-a (serve.sh start)', note: '', runs: '',
   repo: '/work/robot-repo', workdir: '/work/robot-repo', codePaths: [], status: 'up', latencyMs: 18.2, error: null,
   pids: [42], uptimeSeconds: 60, lastOpened: null, connections: 0, ownershipDetail: null, git: null,
-  commands: {}, missingScripts: [], matchedBy: 'path',
+  commands: {}, missingScripts: [], alsoInProjects: [], matchedBy: 'path',
   ...overrides,
 });
 
@@ -184,4 +184,23 @@ test('an empty project points to the all-projects scope', async () => {
   const link = await screen.findByText('Show apps of all projects');
   await act(async () => { fireEvent.click(link); });
   await screen.findByTestId('app-card-tray');
+});
+
+test('an app listed here via also_in_projects says so and links to its owning project', async () => {
+  const tray = app({
+    id: 'tray', name: 'Tray editor', controls: 'status-only', ports: [8802], repo: '/work/pick-and-place', workdir: '/work/pick-and-place',
+    alsoInProjects: ['/work/robot-repo'], matchedBy: 'also',
+    ownerProject: { projectId: 'p2', projectPath: '/work/pick-and-place', displayName: 'pick-and-place' },
+  });
+  view.mockResolvedValue(ok({ ...VIEW, apps: [...VIEW.apps, tray] }));
+  const onOpenProject = vi.fn();
+  await renderPanel(vi.fn(), onOpenProject);
+  const hint = await screen.findByTestId('app-also-hint');
+  assert.ok(screen.getByTestId('app-card-tray').contains(hint));
+  assert.match(hint.textContent ?? '', /also listed here/);
+  // Only the `also` card carries the hint; the project's own apps do not.
+  assert.equal(screen.getAllByTestId('app-also-hint').length, 1);
+  fireEvent.click(screen.getByText(/pick-and-place/));
+  assert.equal(onOpenProject.mock.calls[0][0].projectId, 'p2');
+  assert.equal(onOpenProject.mock.calls[0][0].fullPath, '/work/pick-and-place');
 });

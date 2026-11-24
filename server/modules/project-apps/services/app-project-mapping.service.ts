@@ -71,21 +71,27 @@ export function findAppProject(app: MappableApp, projectPaths: string[]): AppPro
 }
 
 /**
- * Keeps the apps whose owning project (see `findAppProject`) is `projectPath`,
- * tagged with how they matched. Used by the view service.
+ * Keeps the apps shown under `projectPath`, tagged with how they got there:
+ * every app whose owning project (see `findAppProject`) is `projectPath`, plus
+ * every app another project owns (or none does) that lists `projectPath` in
+ * its `alsoInProjects` — tagged `also` and carrying `ownerProjectPath`, the
+ * owner's path or null. Ownership itself never changes, so the all-projects
+ * view still files each app once. Used by the view service.
  */
-export function selectProjectApps<TApp extends MappableApp>(
+export function selectProjectApps<TApp extends MappableApp & Partial<Pick<ProjectAppRecord, 'alsoInProjects'>>>(
   apps: TApp[],
   projectPath: string,
   allProjectPaths: string[],
-): Array<TApp & { matchedBy: ProjectAppMatch }> {
+): Array<TApp & { matchedBy: ProjectAppMatch; ownerProjectPath: string | null }> {
   const target = trimTrailingSlash(projectPath);
   const projects = allProjectPaths.includes(projectPath) ? allProjectPaths : [...allProjectPaths, projectPath];
-  const selected: Array<TApp & { matchedBy: ProjectAppMatch }> = [];
+  const selected: Array<TApp & { matchedBy: ProjectAppMatch; ownerProjectPath: string | null }> = [];
   for (const app of apps) {
     const assignment = findAppProject(app, projects);
     if (assignment && assignment.projectPath === target) {
-      selected.push({ ...app, matchedBy: assignment.matchedBy });
+      selected.push({ ...app, matchedBy: assignment.matchedBy, ownerProjectPath: null });
+    } else if ((app.alsoInProjects ?? []).some((also) => trimTrailingSlash(also) === target)) {
+      selected.push({ ...app, matchedBy: 'also', ownerProjectPath: assignment?.projectPath ?? null });
     }
   }
   return selected;

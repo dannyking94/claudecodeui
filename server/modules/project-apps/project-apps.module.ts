@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
-import type { ProjectAppsServices } from '@/shared/types.js';
+import type { ProjectAppsProjectRef, ProjectAppsServices } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 import { createAppsDashboardClient } from '@/modules/project-apps/services/apps-dashboard.service.js';
 import { createChatLinkCollector, type ChatTranscript } from '@/modules/project-apps/services/chat-urls.service.js';
@@ -45,6 +45,16 @@ function listProjectTranscripts(projectPath: string): ChatTranscript[] {
     }));
 }
 
+function listProjects(): ProjectAppsProjectRef[] {
+  return projectsDb.getProjectPaths().map((row) => ({
+    projectId: row.project_id,
+    projectPath: row.project_path,
+    // The sidebar's own name when set; otherwise the folder name (the sidebar
+    // may show a package.json name instead, but the path is shown beside it).
+    displayName: row.custom_project_name?.trim() || path.basename(row.project_path) || row.project_path,
+  }));
+}
+
 const projectAppsServices: ProjectAppsServices = {
   resolveProjectPath(projectId) {
     const projectPath = projectsDb.getProjectPathById(projectId);
@@ -55,20 +65,11 @@ const projectAppsServices: ProjectAppsServices = {
   },
   getView: (projectPath) => buildProjectAppsView(projectPath, {
     getSnapshot: dashboard.getSnapshot,
-    listProjectPaths: () => projectsDb.getProjectPaths().map((row) => row.project_path),
+    listProjects,
     listProjectTranscripts,
     collectChatLinks: chatLinks.collectChatLinks,
   }),
-  getAllView: () => buildAllProjectAppsView({
-    getSnapshot: dashboard.getSnapshot,
-    listProjects: () => projectsDb.getProjectPaths().map((row) => ({
-      projectId: row.project_id,
-      projectPath: row.project_path,
-      // The sidebar's own name when set; otherwise the folder name (the sidebar
-      // may show a package.json name instead, but the path is shown beside it).
-      displayName: row.custom_project_name?.trim() || path.basename(row.project_path) || row.project_path,
-    })),
-  }),
+  getAllView: () => buildAllProjectAppsView({ getSnapshot: dashboard.getSnapshot, listProjects }),
   runAction: dashboard.runAction,
   getLog: dashboard.getLog,
 };

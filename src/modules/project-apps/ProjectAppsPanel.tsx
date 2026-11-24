@@ -15,7 +15,7 @@ type ProjectAppsPanelProps = {
   selectedProject: Project;
   /** Opens a chat in this project; used by "from chat" cards to jump to the message's session. */
   onOpenSession: (sessionId: string) => void;
-  /** Switches the workspace to another project; used by the "All projects" group headers. */
+  /** Switches the workspace to another project; used by the "All projects" group headers and the "also listed here" hint. */
   onOpenProject: (project: Project) => void;
 };
 
@@ -115,6 +115,7 @@ export function ProjectAppsPanel({ selectedProject, onOpenSession, onOpenProject
       lastResult={actionResults[app.id]}
       onAction={(action) => void runAction(app.id, action)}
       onShowDetails={() => setDetailsAppId(app.id)}
+      onOpenOwnerProject={(owner) => onOpenProject({ projectId: owner.projectId, displayName: owner.displayName, fullPath: owner.projectPath, path: owner.projectPath })}
     />
   );
 

@@ -2,7 +2,7 @@ import { Clock, Copy, CornerDownRight, ExternalLink, Info, Loader2, Play, Rotate
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { ProjectAppWithOwner, ProjectAppAction, ProjectAppActionResult } from '@/shared/types';
+import type { ProjectAppWithOwner, ProjectAppAction, ProjectAppActionResult, ProjectAppOwnerRef } from '@/shared/types';
 import { cn, copyTextToClipboard, formatCompactAge, toBrowserReachableUrl } from '@/shared/utils';
 
 type AppCardProps = {
@@ -13,6 +13,8 @@ type AppCardProps = {
   lastResult: ProjectAppActionResult | { error: string } | undefined;
   onAction: (action: ProjectAppAction) => void;
   onShowDetails: () => void;
+  /** Opens the owning project; used by the hint on an app listed here via `also_in_projects`. */
+  onOpenOwnerProject?: (owner: ProjectAppOwnerRef) => void;
 };
 
 /** The URL the Open button uses: the first browser link, else the health URL made reachable from here. */
@@ -59,7 +61,7 @@ export function StatusDot({ status }: { status: ProjectAppWithOwner['status'] })
 }
 
 /** Card for one registered app on the Apps tab: status, links, who started it, and manage buttons. */
-export function AppCard({ app, pendingAction, isBusyElsewhere, lastResult, onAction, onShowDetails }: AppCardProps) {
+export function AppCard({ app, pendingAction, isBusyElsewhere, lastResult, onAction, onShowDetails, onOpenOwnerProject }: AppCardProps) {
   const { t } = useTranslation();
   // Brief "copied" tick on the Copy button so a tap on a phone has visible feedback.
   const [copied, setCopied] = useState(false);
@@ -150,6 +152,26 @@ export function AppCard({ app, pendingAction, isBusyElsewhere, lastResult, onAct
         {app.matchedBy === 'started-by' && (
           <span title={t('projectApps.matchedByStarter', { defaultValue: 'No project path matched; shown here because this project started it' })}>
             {t('projectApps.viaStarter', { defaultValue: 'via starter' })}
+          </span>
+        )}
+        {app.matchedBy === 'also' && (
+          // Listed here by the registry's `also_in_projects`; it lives (and is managed) in another project.
+          <span className="flex min-w-0 items-center gap-1" data-testid="app-also-hint">
+            <span className="shrink-0">{t('projectApps.alsoListedHere', { defaultValue: 'also listed here' })}</span>
+            {app.ownerProject && (
+              onOpenOwnerProject ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenOwnerProject(app.ownerProject as ProjectAppOwnerRef)}
+                  title={app.ownerProject.projectPath}
+                  className="min-w-0 truncate font-medium text-primary hover:underline"
+                >
+                  · {app.ownerProject.displayName}
+                </button>
+              ) : (
+                <span className="min-w-0 truncate" title={app.ownerProject.projectPath}>· {app.ownerProject.displayName}</span>
+              )
+            )}
           </span>
         )}
       </div>

@@ -23,6 +23,7 @@ const REGISTRY = JSON.stringify({
       id: 'webui', name: 'web ui', purpose: 'q', host: 'local', ports: [18002], health_url: 'http://127.0.0.1:18002/',
       repo: '/work/webui', workdir: '/work/webui', runs: 'unit', pid_source: { kind: 'none' },
       commands: {}, controls: 'status-only', controls_reason: 'owner depends on it',
+      also_in_projects: ['/work/secretary-a//'],
     },
   ],
 });
@@ -45,7 +46,8 @@ async function startFakeDashboard(): Promise<FakeDashboard> {
           started_by: 'secretary-a', note: '', workdir: '/work/robot-repo/tools', commands: { start: ['bash'] },
           pid_kind: 'json-file', up: true, code: 200, ms: 12.5, error: null, pids: [42], uptime_s: 60,
           ownership: { detail: 'recorded PID 42 alive' }, connections: 1, last_opened: 1700000000,
-          git: { branch: 'main', head: 'abc', stale: true, reasons: ['newer commits'] }, missing_scripts: [] },
+          git: { branch: 'main', head: 'abc', stale: true, reasons: ['newer commits'] }, missing_scripts: [],
+          also_in_projects: ['/home/dk-ai-1/', '/home/dk-ai-1', 'relative/path', 7, null, '  '] },
         { id: 'webui', name: 'web ui', up: false, error: 'refused', ports: [18002], controls: 'status-only', workdir: '/work/webui' },
       ] });
     }
@@ -102,6 +104,10 @@ test('snapshot comes from the dashboard, with repo/code_paths merged from the re
     const webui = snapshot.apps.find((a) => a.id === 'webui');
     assert.equal(webui?.status, 'down');
     assert.equal(webui?.controls, 'status-only');
+    // also_in_projects: absolute strings only, trailing slashes trimmed, deduplicated;
+    // from the state when it carries the field, else from the registry entry.
+    assert.deepEqual(viewer?.alsoInProjects, ['/home/dk-ai-1']);
+    assert.deepEqual(webui?.alsoInProjects, ['/work/secretary-a']);
   } finally {
     await fake.close();
   }
@@ -118,6 +124,7 @@ test('when the dashboard is down the registry is read and every app is unknown',
   assert.deepEqual(snapshot.apps.map((a) => [a.id, a.status]), [['viewer', 'unknown'], ['webui', 'unknown']]);
   assert.equal(snapshot.apps[0].repo, '/work/robot-repo');
   assert.deepEqual(snapshot.apps[0].links, ['http://192.0.2.1:18001/', 'http://192.0.2.1:18001/scene']);
+  assert.deepEqual(snapshot.apps.map((a) => a.alsoInProjects), [[], ['/work/secretary-a']]);
 });
 
 test('with neither dashboard nor registry the snapshot is empty and says why', async () => {
