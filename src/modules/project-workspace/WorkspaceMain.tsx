@@ -38,7 +38,7 @@ type WorkspaceMainProps = {
   onShowSettings: (tab?: SettingsMainTab) => void;
   externalMessageUpdate: number;
   newSessionTrigger: number;
-  /** Switches the app to another project — used by the git panel's Worktrees view. */
+  /** Switches the app to another project — used by the git panel's Worktrees view and the Apps tab's "All projects" groups. */
   onProjectSelect: (project: Project) => void;
   /** Silently re-syncs the sidebar project list after worktree projects change. */
   onProjectsRefresh: () => void;
@@ -240,6 +240,7 @@ function WorkspaceMain({
                   onNavigateToSession(sessionId);
                   setActiveTab('chat');
                 }}
+                onOpenProject={onProjectSelect}
               />
             </div>
           )}

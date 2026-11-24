@@ -2,11 +2,11 @@ import { Clock, Copy, CornerDownRight, ExternalLink, Info, Loader2, Play, Rotate
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { ProjectApp, ProjectAppAction, ProjectAppActionResult } from '@/shared/types';
+import type { ProjectAppWithOwner, ProjectAppAction, ProjectAppActionResult } from '@/shared/types';
 import { cn, copyTextToClipboard, formatCompactAge, toBrowserReachableUrl } from '@/shared/utils';
 
 type AppCardProps = {
-  app: ProjectApp;
+  app: ProjectAppWithOwner;
   pendingAction: ProjectAppAction | null;
   /** Another app's action is running; manage buttons wait for it. */
   isBusyElsewhere: boolean;
@@ -16,12 +16,12 @@ type AppCardProps = {
 };
 
 /** The URL the Open button uses: the first browser link, else the health URL made reachable from here. */
-function primaryUrl(app: ProjectApp): string {
+function primaryUrl(app: ProjectAppWithOwner): string {
   return toBrowserReachableUrl(app.links[0] ?? app.healthUrl);
 }
 
 /** Distinct sub-paths across the app's links ("/scene", "/?deploy"); a lone "/" is not worth a chip. */
-function subPathLinks(app: ProjectApp): Array<{ label: string; url: string }> {
+function subPathLinks(app: ProjectAppWithOwner): Array<{ label: string; url: string }> {
   const seen = new Set<string>();
   const chips: Array<{ label: string; url: string }> = [];
   for (const link of app.links) {
@@ -44,7 +44,7 @@ function shortStartedBy(startedBy: string): string {
 }
 
 /** Status dot shared by the Apps tab's app cards and chat-link cards (grey for unchecked). */
-export function StatusDot({ status }: { status: ProjectApp['status'] }) {
+export function StatusDot({ status }: { status: ProjectAppWithOwner['status'] }) {
   return (
     <span
       aria-hidden="true"

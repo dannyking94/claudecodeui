@@ -7,11 +7,12 @@ import { afterEach, beforeEach, test, vi } from 'vitest';
 import type { ProjectApp, ProjectAppsView } from '@/shared/types';
 
 const view = vi.fn();
+const all = vi.fn();
 const action = vi.fn();
 const log = vi.fn();
 
 vi.mock('@/shared/api', () => ({
-  api: { projectApps: { view: (id: string) => view(id), action: (a: string, b: string) => action(a, b), log: (a: string) => log(a) } },
+  api: { projectApps: { view: (id: string) => view(id), all: () => all(), action: (a: string, b: string) => action(a, b), log: (a: string) => log(a) } },
   readApiJson: async (response: { ok: boolean; json: () => Promise<unknown> }) => {
     const body = await response.json() as { error?: string };
     if (!response.ok) throw new Error(body.error ?? 'failed');
@@ -61,6 +62,14 @@ beforeEach(() => {
   view.mockReset().mockResolvedValue(ok(VIEW));
   action.mockReset().mockResolvedValue(ok({ app: 'viewer', action: 'stop', refused: null, exit: 0, steps: ['ports free', 'health still DOWN after 45s'], outputTail: '', upAfter: false }));
   log.mockReset().mockResolvedValue(ok([]));
+  all.mockReset().mockResolvedValue(ok({
+    source: 'dashboard', checkedAt: Date.now(), error: null,
+    apps: [
+      { ...app({}), projectId: 'p1', projectPath: '/work/robot-repo', projectName: 'robot' },
+      { ...app({ id: 'tray', name: 'Tray editor', controls: 'status-only', ports: [8802] }), projectId: 'p2', projectPath: '/work/pick-and-place', projectName: 'pick-and-place' },
+      { ...app({ id: 'stray', name: 'Stray', ports: [9] }), matchedBy: null, projectId: null, projectPath: null, projectName: null },
+    ],
+  }));
 });
 
 afterEach(() => {
@@ -68,9 +77,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderPanel(onOpenSession = vi.fn()) {
+async function renderPanel(onOpenSession = vi.fn(), onOpenProject = vi.fn()) {
   const { ProjectAppsPanel } = await import('@/modules/project-apps/ProjectAppsPanel');
-  render(<ProjectAppsPanel selectedProject={{ projectId: 'p1', displayName: 'robot', fullPath: '/work/robot-repo' }} onOpenSession={onOpenSession} />);
+  render(
+    <ProjectAppsPanel
+      selectedProject={{ projectId: 'p1', displayName: 'robot', fullPath: '/work/robot-repo' }}
+      onOpenSession={onOpenSession}
+      onOpenProject={onOpenProject}
+    />,
+  );
   await screen.findByTestId('app-card-viewer');
   return onOpenSession;
 }
@@ -131,4 +146,42 @@ test('a registry fallback says start/stop is unavailable', async () => {
   await renderPanel();
   assert.ok(screen.getByText(/dashboard is unreachable/));
   assert.ok(screen.getByText(/from apps.json/));
+});
+
+test('"All projects" lists every app grouped by project, this one first and unclaimed apps last', async () => {
+  const onOpenProject = vi.fn();
+  await renderPanel(vi.fn(), onOpenProject);
+  await act(async () => { fireEvent.click(screen.getByText('All projects')); });
+  await screen.findByTestId('app-card-tray');
+  const groups = screen.getAllByTestId('project-apps-group').map((group) => group.textContent ?? '');
+  assert.equal(groups.length, 3);
+  assert.ok(groups[0].startsWith('robot'));
+  assert.ok(groups[1].startsWith('pick-and-place'));
+  assert.ok(groups[2].startsWith('No project'));
+  // No chat-link scan across projects, and no request for this project's view after the switch.
+  assert.equal(screen.queryByTestId('chat-link-card'), null);
+  assert.equal(all.mock.calls.length, 1);
+  // Only another project's group offers to open it.
+  const openButtons = screen.getAllByText('Open project');
+  assert.equal(openButtons.length, 1);
+  fireEvent.click(openButtons[0]);
+  assert.equal(onOpenProject.mock.calls[0][0].projectId, 'p2');
+});
+
+test('the filter in "All projects" also matches the project name', async () => {
+  await renderPanel();
+  await act(async () => { fireEvent.click(screen.getByText('All projects')); });
+  await screen.findByTestId('app-card-tray');
+  fireEvent.change(screen.getByPlaceholderText('Filter…'), { target: { value: 'pick-and' } });
+  assert.ok(screen.getByTestId('app-card-tray'));
+  assert.equal(screen.queryByTestId('app-card-viewer'), null);
+});
+
+test('an empty project points to the all-projects scope', async () => {
+  view.mockResolvedValue(ok({ ...VIEW, apps: [], chatLinks: [] }));
+  const { ProjectAppsPanel } = await import('@/modules/project-apps/ProjectAppsPanel');
+  render(<ProjectAppsPanel selectedProject={{ projectId: 'p1', displayName: 'robot', fullPath: '/work/robot-repo' }} onOpenSession={vi.fn()} onOpenProject={vi.fn()} />);
+  const link = await screen.findByText('Show apps of all projects');
+  await act(async () => { fireEvent.click(link); });
+  await screen.findByTestId('app-card-tray');
 });

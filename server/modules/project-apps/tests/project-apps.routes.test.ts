@@ -16,6 +16,7 @@ function fakeServices(overrides: Partial<ProjectAppsServices> = {}): ProjectApps
       return '/work/robot-repo';
     },
     getView: async (projectPath) => ({ projectPath, source: 'dashboard', checkedAt: 1, error: null, apps: [], chatLinks: [] }),
+    getAllView: async () => ({ source: 'dashboard', checkedAt: 2, error: null, apps: [] }),
     runAction: async (app, action) => ({ app, action, refused: null, exit: 0, steps: [], outputTail: '', upAfter: true }),
     getLog: async () => [],
     ...overrides,
@@ -80,5 +81,15 @@ test('GET /log requires an app id', async () => {
   await withServer(fakeServices(), async (base) => {
     assert.equal((await fetch(`${base}/api/project-apps/log?app=viewer`)).status, 200);
     assert.equal((await fetch(`${base}/api/project-apps/log`)).status, 400);
+  });
+});
+
+test('GET /all returns the all-projects view and needs no project id', async () => {
+  await withServer(fakeServices(), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/project-apps/all`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as { success: boolean; data: { checkedAt: number; apps: unknown[] } };
+    assert.equal(body.success, true);
+    assert.equal(body.data.checkedAt, 2);
   });
 });

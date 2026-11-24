@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildProjectAppsView } from '@/modules/project-apps/services/project-apps-view.service.js';
+import { buildAllProjectAppsView, buildProjectAppsView } from '@/modules/project-apps/services/project-apps-view.service.js';
 import type { ProjectAppRecord } from '@/shared/types.js';
 
 const record = (id: string, repo: string, ports: number[]): ProjectAppRecord => ({
@@ -37,4 +37,38 @@ test('a failing chat scan still returns the registry apps', async () => {
   assert.equal(view.apps.length, 1);
   assert.deepEqual(view.chatLinks, []);
   assert.equal(view.source, 'registry');
+});
+
+test('a status-only page that shares another app\'s port still shows under its repo\'s project', async () => {
+  // The owner's 2026-11-24 case: tray-grasp-editor is a page of shelf-app's
+  // server, registered status-only with `shares_port_with` and no PID of its
+  // own, and the state names only its workdir. Both must land in the repo.
+  const tray = { ...record('tray-grasp-editor', '/work/pnp', [8802]), controls: 'status-only' as const, startedBy: 'secretary dk-ai-1' };
+  const shelf = record('shelf-app', '/work/pnp', [8802]);
+  const view = await buildProjectAppsView('/work/pnp', {
+    getSnapshot: async () => ({ source: 'dashboard', checkedAt: 1, error: null, apps: [shelf, tray] }),
+    listProjectPaths: () => ['/work', '/work/pnp', '/home/dk-ai-1'],
+    listProjectTranscripts: () => [],
+    collectChatLinks: async () => [],
+  });
+  assert.deepEqual(view.apps.map((a) => [a.id, a.matchedBy]), [['shelf-app', 'path'], ['tray-grasp-editor', 'path']]);
+});
+
+test('the all-projects view lists every app once, tagged with its project or with nulls', async () => {
+  const view = await buildAllProjectAppsView({
+    getSnapshot: async () => ({
+      source: 'dashboard', checkedAt: 7, error: null,
+      apps: [record('a', '/work/robot-repo/tools', [1]), record('b', '/work/webui/', [2]), record('orphan', '/elsewhere', [3])],
+    }),
+    listProjects: () => [
+      { projectId: 'p-work', projectPath: '/work', displayName: 'work' },
+      { projectId: 'p-robot', projectPath: '/work/robot-repo/', displayName: 'robot' },
+      { projectId: 'p-web', projectPath: '/work/webui', displayName: 'web ui' },
+    ],
+  });
+  assert.equal(view.checkedAt, 7);
+  assert.deepEqual(
+    view.apps.map((a) => [a.id, a.projectId, a.projectName, a.matchedBy]),
+    [['a', 'p-robot', 'robot', 'path'], ['b', 'p-web', 'web ui', 'path'], ['orphan', null, null, null]],
+  );
 });

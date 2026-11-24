@@ -36,6 +36,7 @@ function readAction(value: unknown): ProjectAppAction {
  * injected services, so route tests can run against fakes.
  *
  * - `GET /?project=<id>`          the project's apps and chat links
+ * - `GET /all`                    every app, tagged with the project it maps to
  * - `POST /action {app, action}`  start / stop / restart through the dashboard
  * - `GET /log?app=<id>`           that app's start/stop history
  */
@@ -47,6 +48,13 @@ export function createProjectAppsRouter(services: ProjectAppsServices): express.
     asyncHandler(async (req, res) => {
       const projectPath = services.resolveProjectPath(readRequired(req.query.project, 'project', 'PROJECT_ID_REQUIRED'));
       res.json(createApiSuccessResponse(await services.getView(projectPath)));
+    }),
+  );
+
+  router.get(
+    '/all',
+    asyncHandler(async (_req, res) => {
+      res.json(createApiSuccessResponse(await services.getAllView()));
     }),
   );
 

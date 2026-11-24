@@ -2159,6 +2159,26 @@ export type ProjectAppsView = {
   chatLinks: ProjectChatLink[];
 };
 
+/**
+ * One app in the Apps tab's "All projects" scope: a ProjectApp tagged with the
+ * project it maps to. The project fields and `matchedBy` are null when no
+ * project claims the app; it is still listed so it can be found.
+ */
+export type ProjectAppWithOwner = Omit<ProjectApp, 'matchedBy'> & {
+  matchedBy: ProjectApp['matchedBy'] | null;
+  projectId: string | null;
+  projectPath: string | null;
+  projectName: string | null;
+};
+
+/** The `/api/project-apps/all` payload: every registered app across projects, with no chat links. */
+export type AllProjectAppsView = {
+  source: ProjectAppsView['source'];
+  checkedAt: number;
+  error: string | null;
+  apps: ProjectAppWithOwner[];
+};
+
 /** A manage action the app dashboard can run for an app whose controls are `full`. */
 export type ProjectAppAction = 'start' | 'stop' | 'restart';
 

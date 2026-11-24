@@ -2110,6 +2110,40 @@ export type ProjectAppsView = {
   chatLinks: ProjectChatLink[];
 };
 
+/**
+ * One app in the all-projects Apps view, tagged with the project it maps to
+ * (see `findAppProject`). The project fields and `matchedBy` are null when no
+ * project claims the app, so an unplaced app is still listed rather than lost.
+ */
+export type ProjectAppWithOwner = ProjectAppRecord & {
+  matchedBy: ProjectAppMatch | null;
+  projectId: string | null;
+  projectPath: string | null;
+  projectName: string | null;
+};
+
+/**
+ * The Apps payload across every project: the fallback for reaching an app
+ * whose project the user cannot find or open. Carries no chat links, which
+ * are per project.
+ */
+export type AllProjectAppsView = {
+  source: ProjectAppsSource;
+  checkedAt: number;
+  error: string | null;
+  apps: ProjectAppWithOwner[];
+};
+
+/**
+ * One active (non-archived) project as the Apps views see it: id for links
+ * back into the workspace, path for mapping, name for labels.
+ */
+export type ProjectAppsProjectRef = {
+  projectId: string;
+  projectPath: string;
+  displayName: string;
+};
+
 /** A start/stop/restart the dashboard accepts; anything else is rejected at the route. */
 export type ProjectAppAction = 'start' | 'stop' | 'restart';
 
@@ -2147,6 +2181,7 @@ export type ProjectAppLogEntry = {
 export type ProjectAppsServices = {
   resolveProjectPath(projectId: string): string;
   getView(projectPath: string): Promise<ProjectAppsView>;
+  getAllView(): Promise<AllProjectAppsView>;
   runAction(appId: string, action: ProjectAppAction): Promise<ProjectAppActionResult>;
   getLog(appId: string): Promise<ProjectAppLogEntry[]>;
 };

@@ -485,6 +485,8 @@ export const api = {
   // Per-project Apps tab: the server proxies the fleet app dashboard.
   projectApps: {
     view: (projectId: string) => get(`/api/project-apps${query({ project: projectId })}`),
+    // Every app across projects, for when the right project is hard to find.
+    all: () => get('/api/project-apps/all'),
     action: (appId: string, action: 'start' | 'stop' | 'restart') =>
       post('/api/project-apps/action', { app: appId, action }),
     log: (appId: string) => get(`/api/project-apps/log${query({ app: appId })}`),

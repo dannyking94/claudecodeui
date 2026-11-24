@@ -2,13 +2,13 @@ import { X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { ProjectApp, ProjectAppLogEntry } from '@/shared/types';
+import type { ProjectAppWithOwner, ProjectAppLogEntry } from '@/shared/types';
 import { Dialog, DialogContent, DialogTitle } from '@/shared/ui';
 import { formatCompactAge } from '@/shared/utils';
 import { fetchProjectAppLog } from '@/modules/project-apps/hooks/useProjectApps';
 
 type AppDetailsDialogProps = {
-  app: ProjectApp;
+  app: ProjectAppWithOwner;
   onClose: () => void;
 };
 

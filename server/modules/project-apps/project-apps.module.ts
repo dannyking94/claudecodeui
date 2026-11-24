@@ -1,9 +1,11 @@
+import path from 'node:path';
+
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import type { ProjectAppsServices } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 import { createAppsDashboardClient } from '@/modules/project-apps/services/apps-dashboard.service.js';
 import { createChatLinkCollector, type ChatTranscript } from '@/modules/project-apps/services/chat-urls.service.js';
-import { buildProjectAppsView } from '@/modules/project-apps/services/project-apps-view.service.js';
+import { buildAllProjectAppsView, buildProjectAppsView } from '@/modules/project-apps/services/project-apps-view.service.js';
 import { createProjectAppsRouter } from '@/modules/project-apps/project-apps.routes.js';
 
 /**
@@ -56,6 +58,16 @@ const projectAppsServices: ProjectAppsServices = {
     listProjectPaths: () => projectsDb.getProjectPaths().map((row) => row.project_path),
     listProjectTranscripts,
     collectChatLinks: chatLinks.collectChatLinks,
+  }),
+  getAllView: () => buildAllProjectAppsView({
+    getSnapshot: dashboard.getSnapshot,
+    listProjects: () => projectsDb.getProjectPaths().map((row) => ({
+      projectId: row.project_id,
+      projectPath: row.project_path,
+      // The sidebar's own name when set; otherwise the folder name (the sidebar
+      // may show a package.json name instead, but the path is shown beside it).
+      displayName: row.custom_project_name?.trim() || path.basename(row.project_path) || row.project_path,
+    })),
   }),
   runAction: dashboard.runAction,
   getLog: dashboard.getLog,

@@ -1,5 +1,11 @@
-import type { ProjectAppsSnapshot, ProjectAppsView, ProjectChatLink } from '@/shared/types.js';
-import { selectProjectApps } from '@/modules/project-apps/services/app-project-mapping.service.js';
+import type {
+  AllProjectAppsView,
+  ProjectAppsProjectRef,
+  ProjectAppsSnapshot,
+  ProjectAppsView,
+  ProjectChatLink,
+} from '@/shared/types.js';
+import { findAppProject, selectProjectApps } from '@/modules/project-apps/services/app-project-mapping.service.js';
 import type { ChatTranscript } from '@/modules/project-apps/services/chat-urls.service.js';
 
 /** Collaborators the view needs; the module composition supplies the real ones. */
@@ -40,5 +46,39 @@ export async function buildProjectAppsView(
     error: snapshot.error,
     apps,
     chatLinks,
+  };
+}
+
+/**
+ * Assembles the all-projects Apps view: every registry app, each tagged with
+ * the project `findAppProject` gives it (the same rule as the per-project tab,
+ * so an app never shows under two projects) or with nulls when none claims it.
+ * Used by the module composition behind `GET /api/project-apps/all`, the
+ * fallback for an app whose project is hard to find in the sidebar.
+ */
+export async function buildAllProjectAppsView(dependencies: {
+  getSnapshot(): Promise<ProjectAppsSnapshot>;
+  listProjects(): ProjectAppsProjectRef[];
+}): Promise<AllProjectAppsView> {
+  const snapshot = await dependencies.getSnapshot();
+  const projects = dependencies.listProjects();
+  const projectByPath = new Map(projects.map((project) => [project.projectPath.replace(/\/+$/, '') || '/', project]));
+  const projectPaths = projects.map((project) => project.projectPath);
+
+  return {
+    source: snapshot.source,
+    checkedAt: snapshot.checkedAt,
+    error: snapshot.error,
+    apps: snapshot.apps.map((app) => {
+      const assignment = findAppProject(app, projectPaths);
+      const project = assignment ? projectByPath.get(assignment.projectPath) ?? null : null;
+      return {
+        ...app,
+        matchedBy: project ? assignment?.matchedBy ?? null : null,
+        projectId: project?.projectId ?? null,
+        projectPath: project?.projectPath ?? null,
+        projectName: project?.displayName ?? null,
+      };
+    }),
   };
 }
