@@ -64,7 +64,8 @@
     "idleProcessIndicator": "Open: its process is alive, waiting for input",
     "unreadActivityIndicator": "New activity since you last opened it",
     "liveSessionIndicator": "Live: a turn is running or its process is open",
-    "backgroundWorkIndicator": "Background work running"
+    "backgroundWorkIndicator": "Background work running",
+    "workerAlertIndicator": "A worker died or stalled"
   },
   "navigation": {
     "chat": "Chat",
@@ -184,5 +185,18 @@
     "archiveSessions_other": "Archive {{count}} sessions",
     "archiveSessionsNotice_one": "Archive keeps the session out of the active list while preserving its history.",
     "archiveSessionsNotice_other": "Archive keeps the sessions out of the active list while preserving their history."
+  },
+  "workerState": {
+    "died": "died",
+    "diedLabel": "Worker died: {{cause}}",
+    "diedUnknownCause": "exited without a report",
+    "stalled": "stalled",
+    "stalledLabel": "Stalled: no activity {{minutes}} min",
+    "stalledLabelNoTime": "Stalled: no activity",
+    "blackout": "blackout",
+    "blackoutLabel": "Blackout: {{cause}}",
+    "blackoutUnknownCause": "the codex worker went silent",
+    "reportedLabel": "Report sent",
+    "reportedLabelAt": "Report sent · {{time}}"
   }
 }

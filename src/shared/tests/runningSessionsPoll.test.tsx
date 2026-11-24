@@ -163,3 +163,44 @@ test('a hidden page does not poll, and reads at once when shown again', async ()
     setVisibility('visible');
   }
 });
+
+test('the poll carries the deathwatch verdicts by session, skipping entries it cannot read', async () => {
+  runningSessions.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      data: {
+        sessions: [],
+        workerStates: [
+          { sessionId: 'dead', state: 'died', cause: 'OOM-killed 11:10', since: 1_795_000_000_000, lastActivity: null, instance: 'dk-ai-0', worker: 'w' },
+          { sessionId: 'slow', state: 'stalled', cause: '', since: null, lastActivity: 1_795_000_000_000, worker: 'v' },
+          { sessionId: 'weird', state: 'exploded' },
+          { state: 'died' },
+        ],
+      },
+    }),
+  });
+
+  const { SessionProtectionProvider, useWorkerStateMap } = await import('@/shared/context/SessionProtectionContext');
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(SessionProtectionProvider, null, children);
+  const { result } = renderHook(() => useWorkerStateMap(), { wrapper });
+
+  await waitFor(() => assert.equal(result.current.size, 2));
+  assert.deepEqual(result.current.get('dead'), {
+    sessionId: 'dead', state: 'died', cause: 'OOM-killed 11:10', since: 1_795_000_000_000, lastActivity: null, worker: 'w',
+  });
+  assert.equal(result.current.get('slow')?.state, 'stalled');
+  assert.equal(result.current.has('weird'), false);
+});
+
+test('an older server with no deathwatch field means no worker badges', async () => {
+  runningSessions.mockResolvedValue({ ok: true, json: async () => ({ data: { sessions: [] } }) });
+
+  const { SessionProtectionProvider, useWorkerStateMap } = await import('@/shared/context/SessionProtectionContext');
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(SessionProtectionProvider, null, children);
+  const { result } = renderHook(() => useWorkerStateMap(), { wrapper });
+
+  await waitFor(() => assert.equal(runningSessions.mock.calls.length > 0, true));
+  assert.equal(result.current.size, 0);
+});

@@ -14,7 +14,8 @@ import {
   isSpawnNestingEnabled,
   orderRootsByOwnActivity,
 } from '@/modules/sidebar/utils/sessionTree';
-import { useIdleProcessSessionIdSet } from '@/shared/context/SessionProtectionContext';
+import { useIdleProcessSessionIdSet, useWorkerStateMap } from '@/shared/context/SessionProtectionContext';
+import { useWorkerAlertSessionIds } from '@/modules/sidebar/hooks/useWorkerAlertSessionIds';
 import type { ChildSessionFold } from '@/modules/sidebar/utils/sessionTree';
 import {
   readExpandedParentSessionIds,
@@ -86,24 +87,31 @@ const relinkVisibleRows = (rows: ProjectSessionTreeRow[]): ProjectSessionTreeRow
 
 /**
  * Dots on the project's "Show N more" toggle, standing in for the sessions it
- * is holding: amber for unread activity, green for anything live. Only this
+ * is holding: red for a worker that died or stalled, amber for unread
+ * activity, green for anything live. Only this
  * fold needs them — it cuts by top-level conversation, so a live root can in
  * principle fall past the cut. The arrows on parent rows cannot: a live child
  * is never one they fold.
  */
 function FoldedSessionIndicators({
+  foldedAlertCount,
   foldedLiveCount,
   foldedUnreadCount,
   t,
 }: {
+  foldedAlertCount: number;
   foldedLiveCount: number;
   foldedUnreadCount: number;
   t: TFunction;
 }) {
+  const alertLabel = t('tooltips.workerAlertIndicator', { defaultValue: 'A worker died or stalled' });
   const unreadLabel = t('tooltips.unreadActivityIndicator', { defaultValue: 'New activity since you last opened it' });
   const liveLabel = t('tooltips.liveSessionIndicator', { defaultValue: 'Live: a turn is running or its process is open' });
   return (
     <>
+      {foldedAlertCount > 0 && (
+        <span role="status" title={alertLabel} aria-label={alertLabel} className="h-1.5 w-1.5 rounded-full bg-red-500" />
+      )}
       {foldedUnreadCount > 0 && (
         <span role="status" title={unreadLabel} aria-label={unreadLabel} className="h-1.5 w-1.5 rounded-full bg-amber-500" />
       )}
@@ -171,6 +179,7 @@ export default function SidebarProjectSessions({
 }: SidebarProjectSessionsProps) {
   const isCompact = useCompactSidebar();
   const idleProcessSessionIds = useIdleProcessSessionIdSet();
+  const workerStates = useWorkerStateMap();
   // Spawned-session nesting (ours) rides on the fork tree (upstream's): the same
   // builder hangs a worker under the session that launched it, and the block
   // below folds the quiet ones and caps the project at a few conversations.
@@ -181,6 +190,8 @@ export default function SidebarProjectSessions({
     [sessions, project.projectId, spawnNesting],
   );
   const selectedSessionId = selectedSession?.id ?? null;
+  // Died or stalled workers nobody has opened yet: never folded away.
+  const workerAlertSessionIds = useWorkerAlertSessionIds(workerStates, selectedSessionId);
   const [expandedParentIds, setExpandedParentIds] = useState<ReadonlySet<string>>(readExpandedParentSessionIds);
   const [isShowingAllSessions, setIsShowingAllSessions] = useState(false);
   const toggleFoldedChildren = (parentSessionId: string) => {
@@ -212,8 +223,12 @@ export default function SidebarProjectSessions({
     const isFoldableChild = (session: SessionWithProvider) => spawnedSessionIds.has(session.id);
     // Roots are ranked by what stays visible, so one whose recent activity is
     // all in folded, stopped workers falls past the cut like any old session.
+    // An alerting worker stays drawn like a live one, so it ranks its root the same way.
+    const drawnSessionIds = workerAlertSessionIds.size === 0
+      ? liveSessionIds
+      : new Set([...liveSessionIds, ...workerAlertSessionIds]);
     const orderedRows = orderRootsByOwnActivity(treeRows, {
-      liveSessionIds,
+      liveSessionIds: drawnSessionIds,
       isFoldableChild,
     });
     const foldedRows = foldChildSessions(
@@ -223,8 +238,12 @@ export default function SidebarProjectSessions({
         // Ids belonging to other projects are harmless: the fold only looks
         // up sessions it is already rendering.
         liveSessionIds,
-        // The session on screen, and one being renamed, keep their rows.
-        pinnedSessionIds: new Set([selectedSessionId, sessionRenameId].filter((id): id is string => Boolean(id))),
+        // The session on screen, one being renamed, and a worker that died or
+        // stalled unseen keep their rows.
+        pinnedSessionIds: new Set([
+          ...[selectedSessionId, sessionRenameId].filter((id): id is string => Boolean(id)),
+          ...workerAlertSessionIds,
+        ]),
         // A fork keeps the fork tree's own always-open default.
         isFoldableChild,
       },
@@ -280,11 +299,12 @@ export default function SidebarProjectSessions({
         (total, row) => total + (childFoldBySessionId.get(row.session.id)?.foldedCount ?? 0),
         0,
       ),
+      foldedAlertCount: hiddenRows.filter((row) => workerAlertSessionIds.has(row.session.id)).length,
       foldedLiveCount: hiddenRows.filter((row) => liveSessionIds.has(row.session.id)).length,
       foldedUnreadCount: hiddenRows.filter((row) => attentionSessionIds.has(row.session.id)).length,
     };
   }, [
-    spawnNesting, treeRows, liveSessionIds, attentionSessionIds, expandedParentIds,
+    spawnNesting, treeRows, liveSessionIds, attentionSessionIds, expandedParentIds, workerAlertSessionIds,
     selectedSessionId, sessionRenameId, isShowingAllSessions,
   ]);
   const baseRows = spawnTree?.rows ?? treeRows;
@@ -563,6 +583,7 @@ export default function SidebarProjectSessions({
                     isProcessing={isSessionRunning(session)}
                     hasBackgroundWork={backgroundSessionIds.has(session.id)}
                     hasIdleProcess={idleProcessSessionIds.has(session.id)}
+                    workerState={workerStates.get(session.id) ?? null}
                     needsAttention={attentionSessionIds.has(session.id)}
                     currentTime={currentTime}
                     onRenameDraftChange={onRenameDraftChange}
@@ -605,6 +626,7 @@ export default function SidebarProjectSessions({
                   <ChevronDown className="h-3 w-3" />
                   {t('sessions.showAllSessions', { hidden: spawnTree.foldedSessionCount, defaultValue: 'Show {{hidden}} more' })}
                   <FoldedSessionIndicators
+                    foldedAlertCount={spawnTree.foldedAlertCount}
                     foldedLiveCount={spawnTree.foldedLiveCount}
                     foldedUnreadCount={spawnTree.foldedUnreadCount}
                     t={t}

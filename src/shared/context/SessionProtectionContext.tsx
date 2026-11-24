@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 import {
   useSessionProtection,
 } from '@/shared/hooks/useSessionProtection';
-import type { BackgroundTaskSummary, GetSessionActivity, IsSessionProcessing, MarkSessionBackground, MarkSessionIdle, MarkSessionProcessing, SessionActivity, SessionActivityMap, SyncProcessingSessions } from '@/shared/types';
+import type { BackgroundTaskSummary, WorkerDeathwatchState, WorkerStateEntry, GetSessionActivity, IsSessionProcessing, MarkSessionBackground, MarkSessionIdle, MarkSessionProcessing, SessionActivity, SessionActivityMap, SyncProcessingSessions } from '@/shared/types';
 import { api } from '@/shared/api';
 
 type RunningSessionApiItem = {
@@ -29,6 +29,7 @@ type RunningSessionsApiPayload = {
     sessions?: RunningSessionApiItem[];
     idleProcessSessionIds?: unknown;
     includesExternalActivity?: unknown;
+    workerStates?: unknown;
   };
 };
 
@@ -54,7 +55,42 @@ const SessionProtectionActionsContext = createContext<SessionProtectionActions |
 const BusySessionIdsContext = createContext<ReadonlySet<string> | null>(null);
 const BackgroundSessionIdsContext = createContext<ReadonlySet<string> | null>(null);
 const IdleProcessSessionIdsContext = createContext<ReadonlySet<string> | null>(null);
+const WorkerStatesContext = createContext<ReadonlyMap<string, WorkerStateEntry> | null>(null);
 const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set();
+const EMPTY_WORKER_STATES: ReadonlyMap<string, WorkerStateEntry> = new Map();
+const WORKER_DEATHWATCH_STATES: ReadonlySet<string> = new Set<WorkerDeathwatchState>(['died', 'stalled', 'blackout', 'reported']);
+
+const readOptionalEpoch = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+
+/**
+ * The poll's deathwatch entries, as a JSON key so an unchanged list keeps the
+ * map's identity across polls (the sidebar re-folds on a new identity). An
+ * entry in a shape this client does not read is skipped; an older server sends
+ * none at all, which is simply no badges.
+ */
+const readWorkerStatesKey = (value: unknown): string => {
+  if (!Array.isArray(value)) {
+    return '';
+  }
+  const entries: WorkerStateEntry[] = [];
+  for (const item of value) {
+    const entry = item as Partial<Record<keyof WorkerStateEntry, unknown>> | null;
+    if (!entry || typeof entry.sessionId !== 'string' || !entry.sessionId
+      || typeof entry.state !== 'string' || !WORKER_DEATHWATCH_STATES.has(entry.state)) {
+      continue;
+    }
+    entries.push({
+      sessionId: entry.sessionId,
+      state: entry.state as WorkerDeathwatchState,
+      cause: typeof entry.cause === 'string' ? entry.cause : '',
+      since: readOptionalEpoch(entry.since),
+      lastActivity: readOptionalEpoch(entry.lastActivity),
+      worker: typeof entry.worker === 'string' ? entry.worker : '',
+    });
+  }
+  return entries.length > 0 ? JSON.stringify(entries.sort((a, b) => a.sessionId.localeCompare(b.sessionId))) : '';
+};
 
 /** The poll's idle-process ids, sorted and joined so an unchanged set keeps its identity. */
 const readIdleProcessMembershipKey = (value: unknown): string =>
@@ -152,6 +188,7 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
     getSessionActivity,
   } = useSessionProtection();
   const [idleProcessMembershipKey, setIdleProcessMembershipKey] = useState('');
+  const [workerStatesKey, setWorkerStatesKey] = useState('');
 
   const refreshRunningSessions = useCallback(async () => {
     try {
@@ -163,6 +200,7 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
       const payload = (await response.json()) as RunningSessionsApiPayload;
       const sessions = Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
       setIdleProcessMembershipKey(readIdleProcessMembershipKey(payload.data?.idleProcessSessionIds));
+      setWorkerStatesKey(readWorkerStatesKey(payload.data?.workerStates));
 
       syncProcessingSessions(
         sessions
@@ -253,15 +291,23 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
     () => new Set(idleProcessMembershipKey ? idleProcessMembershipKey.split('\u0000') : []),
     [idleProcessMembershipKey],
   );
+  const workerStates = useMemo<ReadonlyMap<string, WorkerStateEntry>>(
+    () => (workerStatesKey
+      ? new Map((JSON.parse(workerStatesKey) as WorkerStateEntry[]).map((entry) => [entry.sessionId, entry]))
+      : EMPTY_WORKER_STATES),
+    [workerStatesKey],
+  );
 
   return (
     <SessionProtectionActionsContext.Provider value={actions}>
       <BusySessionIdsContext.Provider value={busySessionIds}>
         <BackgroundSessionIdsContext.Provider value={backgroundSessionIds}>
           <IdleProcessSessionIdsContext.Provider value={idleProcessSessionIds}>
-            <SessionProtectionStateContext.Provider value={processingSessions}>
-              {children}
-            </SessionProtectionStateContext.Provider>
+            <WorkerStatesContext.Provider value={workerStates}>
+              <SessionProtectionStateContext.Provider value={processingSessions}>
+                {children}
+              </SessionProtectionStateContext.Provider>
+            </WorkerStatesContext.Provider>
           </IdleProcessSessionIdsContext.Provider>
         </BackgroundSessionIdsContext.Provider>
       </BusySessionIdsContext.Provider>
@@ -305,6 +351,16 @@ export function useBackgroundSessionIdSet(): ReadonlySet<string> {
  */
 export function useIdleProcessSessionIdSet(): ReadonlySet<string> {
   return useContext(IdleProcessSessionIdsContext) ?? EMPTY_SESSION_ID_SET;
+}
+
+/**
+ * The secretaries' deathwatch verdicts on their workers, by app session id,
+ * from the same 5 s poll. Used by the sidebar module to badge a worker's row
+ * and to keep a died or stalled one out of its parent's fold. Stable identity
+ * while unchanged; empty, never throwing, outside the provider.
+ */
+export function useWorkerStateMap(): ReadonlyMap<string, WorkerStateEntry> {
+  return useContext(WorkerStatesContext) ?? EMPTY_WORKER_STATES;
 }
 
 export function useProcessingSessions(): SessionActivityMap {

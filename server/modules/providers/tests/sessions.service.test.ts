@@ -584,3 +584,37 @@ test('the liveness snapshot lists a mid-turn secretary as external activity', { 
     claudeSecretaryActivity.listWorkingSessions = realList;
   }
 });
+
+test('the liveness snapshot maps deathwatch workers to their app sessions', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async () => {
+    sessionsDb.createAppSession('worker-app', 'claude', '/tmp/deathwatch-project');
+    sessionsDb.assignProviderSessionId('worker-app', 'worker-provider');
+    await withClaudeCliRegistry([], async () => {
+      const home = os.homedir();
+      const checkout = path.join(home, 'secretary');
+      await mkdir(path.join(checkout, 'states'), { recursive: true });
+      await mkdir(path.join(home, '.config', 'dk-secretaries'), { recursive: true });
+      await writeFile(
+        path.join(home, '.config', 'dk-secretaries', 'registry.json'),
+        JSON.stringify({ instances: { 'dk-ai-0': { cwd: checkout } } }),
+        'utf8',
+      );
+      await writeFile(path.join(checkout, 'states', 'deathwatch-state.json'), JSON.stringify({
+        version: 1,
+        instance: 'dk-ai-0',
+        generated_epoch: Math.floor(Date.now() / 1000),
+        workers: [
+          { name: 'sidebar', session_id: 'worker-provider', state: 'died', cause: 'OOM-killed 11:10', since: '2026-11-24 11:10:12' },
+          { name: 'unknown', session_id: 'not-in-cloudcli', state: 'died', cause: '' },
+        ],
+      }), 'utf8');
+
+      await withProviders({ claude: { run: async () => undefined, abort: () => false } }, async () => {
+        const snapshot = await sessionsService.readSessionLiveness();
+        assert.deepEqual(snapshot.workerStates.map((entry) => [entry.sessionId, entry.state, entry.cause]), [
+          ['worker-app', 'died', 'OOM-killed 11:10'],
+        ]);
+      });
+    });
+  });
+});

@@ -296,6 +296,30 @@ export type SessionActivitySnapshot = {
   external?: boolean;
 };
 
+/**
+ * A secretary's deathwatch verdict on one of its workers, as the running-sessions
+ * poll reports it: `died` (its session ended with no report), `stalled` (alive
+ * but silent past its allowance), `blackout` (a codex worker cut off) or
+ * `reported` (it sent its report). `working` and `done` are never listed — the
+ * liveness dots already say those. Read by the sidebar to badge the row and to
+ * keep died/stalled workers out of the "+N inactive" fold.
+ */
+export type WorkerDeathwatchState = 'died' | 'stalled' | 'blackout' | 'reported';
+
+/** One worker's deathwatch entry, keyed by the app session id of its sidebar row; see WorkerDeathwatchState. */
+export type WorkerStateEntry = {
+  sessionId: string;
+  state: WorkerDeathwatchState;
+  /** The detector's own words, e.g. "OOM-killed 11:10:01 — node (vitest 12), anon-rss 51.9 GB"; '' when none. */
+  cause: string;
+  /** When it entered this state, epoch ms, or null when unknown. */
+  since: number | null;
+  /** Its transcript's last write, epoch ms, or null when unknown. */
+  lastActivity: number | null;
+  /** The worker's ledger name, e.g. "cloudcli-sidebar-live"; '' when unknown. */
+  worker: string;
+};
+
 // ---------------------------
 
 //----------------- REALTIME TRANSPORT ------------

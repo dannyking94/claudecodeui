@@ -9,6 +9,8 @@ import { claudeSecretaryActivity } from '@/modules/providers/list/claude/claude-
 import { listLiveClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
+import { workerDeathwatch } from '@/modules/providers/services/worker-deathwatch.service.js';
+import type { DeathwatchWorkerEntry } from '@/modules/providers/services/worker-deathwatch.service.js';
 import type {
   BackgroundTaskSummary,
   ClearedContextSegment,
@@ -61,7 +63,39 @@ type SessionLivenessSnapshot = {
    * field never listed them, and its clients must keep waiting for the event.
    */
   includesExternalActivity: true;
+  /**
+   * Workers a secretary's deathwatch marks as died, stalled, blacked out or
+   * reported, keyed by app session id. Empty when no snapshot is readable.
+   */
+  workerStates: WorkerStateEntry[];
 };
+
+/** One deathwatch entry, addressed to the sidebar row it belongs to. */
+type WorkerStateEntry = Omit<DeathwatchWorkerEntry, 'providerSessionId'> & { sessionId: string };
+
+/**
+ * The deathwatch's notable workers mapped to app session ids. The snapshot
+ * records the provider's id (claude's --session-id, a codex thread); a legacy
+ * row whose app id is that same id resolves through the second lookup. A
+ * worker cloudcli has no row for is dropped — there is nothing to mark.
+ */
+async function readWorkerStates(): Promise<WorkerStateEntry[]> {
+  let entries: DeathwatchWorkerEntry[];
+  try {
+    entries = await workerDeathwatch.listNotableWorkers();
+  } catch {
+    return [];
+  }
+  const states: WorkerStateEntry[] = [];
+  for (const { providerSessionId, ...rest } of entries) {
+    const session = sessionsDb.getSessionByProviderSessionId(providerSessionId)
+      ?? sessionsDb.getSessionById(providerSessionId);
+    if (session) {
+      states.push({ sessionId: session.session_id, ...rest });
+    }
+  }
+  return states;
+}
 
 type CreateAppSessionResult = {
   sessionId: string;
@@ -426,7 +460,8 @@ export const sessionsService = {
    * Everything the sidebar needs to tell a live session from a stopped one,
    * from one registry scan: the running sessions, the sessions whose Claude
    * CLI process is alive but idle at its prompt, and the registered
-   * secretaries that are mid-turn (flagged `external`).
+   * secretaries that are mid-turn (flagged `external`), plus the secretaries'
+   * deathwatch verdicts on their workers (`workerStates`).
    *
    * Idle processes are reported beside the running sessions rather than among
    * them: nothing is in flight, so they must not spin or lock the row, but the
@@ -467,7 +502,12 @@ export const sessionsService = {
       }
     }
 
-    return { sessions, idleProcessSessionIds: [...idleProcessSessionIds], includesExternalActivity: true };
+    return {
+      sessions,
+      idleProcessSessionIds: [...idleProcessSessionIds],
+      includesExternalActivity: true,
+      workerStates: await readWorkerStates(),
+    };
   },
 
   /**

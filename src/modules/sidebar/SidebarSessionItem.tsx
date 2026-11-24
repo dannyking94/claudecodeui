@@ -5,7 +5,7 @@ import type { TFunction } from 'i18next';
 
 import { Badge, Dialog, DialogContent, DialogTitle, LLMProviderLogo, Tooltip, buttonVariants } from '@/shared/ui';
 import { cn } from '@/shared/utils';
-import type { LLMProvider, Project, ProjectSession, SessionWithProvider } from '@/shared/types';
+import type { LLMProvider, Project, ProjectSession, SessionWithProvider, WorkerDeathwatchState, WorkerStateEntry } from '@/shared/types';
 import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
 import { PROVIDER_LABELS, createSessionViewModel, formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import { useCompactSidebar } from '@/modules/sidebar/hooks/useCompactSidebar';
@@ -47,6 +47,92 @@ const readSessionStatusIndicator = (
   return null;
 };
 
+/**
+ * The deathwatch badge's look per state. Text chips, not dots, so they never
+ * read as one of the status dots above: died is the one that must catch the
+ * eye, stalled is a warning, blackout a codex worker cut off, and reported a
+ * quiet tick.
+ */
+const WORKER_BADGE_CLASSES: Record<WorkerDeathwatchState, string> = {
+  died: 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300',
+  stalled: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+  blackout: 'border-zinc-500/40 bg-zinc-500/15 text-zinc-700 dark:text-zinc-300',
+  reported: 'border-transparent bg-transparent text-muted-foreground',
+};
+
+const formatClockTime = (epochMs: number | null): string => {
+  if (epochMs === null) return '';
+  const date = new Date(epochMs);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
+
+/** The badge's short text and its full explanation, in plain words. */
+const describeWorkerState = (
+  entry: WorkerStateEntry,
+  currentTime: Date,
+  t: TFunction,
+): { text: string; label: string } => {
+  const since = formatClockTime(entry.since);
+  switch (entry.state) {
+    case 'died':
+      return {
+        text: t('workerState.died', { defaultValue: 'died' }),
+        label: t('workerState.diedLabel', {
+          cause: entry.cause || t('workerState.diedUnknownCause', { defaultValue: 'exited without a report' }),
+          defaultValue: 'Worker died: {{cause}}',
+        }),
+      };
+    case 'stalled': {
+      const quietSince = entry.lastActivity ?? entry.since;
+      const minutes = quietSince === null ? null : Math.max(Math.round((currentTime.getTime() - quietSince) / 60_000), 0);
+      const label = minutes === null
+        ? t('workerState.stalledLabelNoTime', { defaultValue: 'Stalled: no activity' })
+        : t('workerState.stalledLabel', { minutes, defaultValue: 'Stalled: no activity {{minutes}} min' });
+      return {
+        text: t('workerState.stalled', { defaultValue: 'stalled' }),
+        label: entry.cause ? `${label} · ${entry.cause}` : label,
+      };
+    }
+    case 'blackout':
+      return {
+        text: t('workerState.blackout', { defaultValue: 'blackout' }),
+        label: t('workerState.blackoutLabel', {
+          cause: entry.cause || t('workerState.blackoutUnknownCause', { defaultValue: 'the codex worker went silent' }),
+          defaultValue: 'Blackout: {{cause}}',
+        }),
+      };
+    case 'reported':
+    default:
+      return {
+        text: '✓',
+        label: since
+          ? t('workerState.reportedLabelAt', { time: since, defaultValue: 'Report sent · {{time}}' })
+          : t('workerState.reportedLabel', { defaultValue: 'Report sent' }),
+      };
+  }
+};
+
+/** The deathwatch chip on a worker's row; the explanation is its tooltip and accessible name. */
+function WorkerStateBadge({ entry, currentTime, t }: { entry: WorkerStateEntry; currentTime: Date; t: TFunction }) {
+  const { text, label } = describeWorkerState(entry, currentTime, t);
+  return (
+    <Tooltip content={label} position="top">
+      <span
+        role="status"
+        aria-label={label}
+        title={label}
+        data-worker-state={entry.state}
+        className={cn(
+          'flex-shrink-0 rounded border px-1 text-[10px] font-medium leading-4',
+          WORKER_BADGE_CLASSES[entry.state],
+        )}
+      >
+        {text}
+      </span>
+    </Tooltip>
+  );
+}
+
 type SidebarSessionItemProps = {
   project: Project;
   session: SessionWithProvider;
@@ -56,6 +142,8 @@ type SidebarSessionItemProps = {
   hasBackgroundWork: boolean;
   /** A Claude CLI process for this session is alive but idle at its prompt. */
   hasIdleProcess?: boolean;
+  /** A secretary's deathwatch verdict on this worker: died, stalled, blackout or reported. */
+  workerState?: WorkerStateEntry | null;
   /** Unread: something happened in this session since the user last opened it. */
   needsAttention: boolean;
   currentTime: Date;
@@ -95,6 +183,7 @@ function SidebarSessionItem({
   isProcessing,
   hasBackgroundWork,
   hasIdleProcess = false,
+  workerState = null,
   needsAttention,
   currentTime,
   isEditing,
@@ -128,6 +217,7 @@ function SidebarSessionItem({
     hasUnreadActivity: needsAttention && !isSelected,
   }, t);
   const isLive = isProcessing || hasBackgroundWork || hasIdleProcess;
+  const workerBadge = workerState ? <WorkerStateBadge entry={workerState} currentTime={currentTime} t={t} /> : null;
   const providerLabel = PROVIDER_LABELS[session.__provider];
 
   // The desktop controls live in SessionOptions, which owns the rename panel and
@@ -298,6 +388,7 @@ function SidebarSessionItem({
                 >
                   {sessionView.sessionName}
                 </div>
+                {workerBadge}
                 {isProcessing ? (
                   <span className="ml-auto flex-shrink-0">
                     <Tooltip content={t('tooltips.processingSessionIndicator', 'Running: a turn is in progress')} position="top">
@@ -364,6 +455,12 @@ function SidebarSessionItem({
                     <span data-session-status-text="">{` · ${statusIndicator.label}`}</span>
                   )}
                 </p>
+                {/* No hover on a phone: the sheet is where the badge's explanation is read. */}
+                {workerState && (
+                  <p className="text-xs text-muted-foreground" data-worker-state-text="">
+                    {describeWorkerState(workerState, currentTime, t).label}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -572,6 +669,7 @@ function SidebarSessionItem({
                 >
                   {sessionView.sessionName}
                 </div>
+                {workerBadge}
                 {isProcessing ? (
                   <span
                     className={cn(
