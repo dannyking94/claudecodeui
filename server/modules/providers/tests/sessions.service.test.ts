@@ -8,6 +8,7 @@ import { closeConnection, initializeDatabase, projectsDb, sessionsDb } from '@/m
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
+import { codexCliLiveness } from '@/modules/providers/services/codex-cli-liveness.service.js';
 import type { IProvider } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary } from '@/shared/types.js';
 
@@ -237,9 +238,13 @@ async function withClaudeCliRegistry(
 
   const realHomedir = os.homedir;
   (os as unknown as { homedir: () => string }).homedir = () => homeDirectory;
+  // The host's real codex processes must not leak into a claude-only snapshot.
+  const realListCodex = codexCliLiveness.listLiveSessions;
+  codexCliLiveness.listLiveSessions = async () => [];
   try {
     await runTest();
   } finally {
+    codexCliLiveness.listLiveSessions = realListCodex;
     (os as unknown as { homedir: () => string }).homedir = realHomedir;
     await rm(homeDirectory, { recursive: true, force: true });
   }
@@ -614,6 +619,48 @@ test('the liveness snapshot maps deathwatch workers to their app sessions', { co
         assert.deepEqual(snapshot.workerStates.map((entry) => [entry.sessionId, entry.state, entry.cause]), [
           ['worker-app', 'died', 'OOM-killed 11:10'],
         ]);
+      });
+    });
+  });
+});
+
+test('the liveness snapshot lists a live codex worker by its thread id, and drops it once it exits', { concurrency: false }, async () => {
+  // A secretary's `codex exec` worker runs outside CloudCLI; its row must read
+  // as live (and so never fold) exactly while the process holds the thread.
+  await withIsolatedDatabase(async () => {
+    // How a spawned worker's row looks: app id = provider id = thread id.
+    sessionsDb.createSession('thread-exec', 'codex', '/tmp/codex-worker');
+    sessionsDb.createAppSession('app-tui', 'codex', '/tmp/codex-worker');
+    sessionsDb.assignProviderSessionId('app-tui', 'thread-tui');
+    // A legacy row: app id is the thread id, no provider id recorded.
+    sessionsDb.createAppSession('thread-legacy', 'codex', '/tmp/codex-worker');
+
+    await withClaudeCliRegistry([], async () => {
+      let live = [
+        { providerSessionId: 'thread-exec', startedAt: 5_000, isBusy: true },
+        { providerSessionId: 'thread-tui', startedAt: 6_000, isBusy: false },
+        { providerSessionId: 'thread-legacy', startedAt: 7_000, isBusy: true },
+        { providerSessionId: 'thread-without-row', startedAt: 8_000, isBusy: true },
+      ];
+      codexCliLiveness.listLiveSessions = async () => live;
+      await withProviders({ codex: { run: async () => undefined, abort: () => false } }, async () => {
+        const snapshot = await sessionsService.readSessionLiveness();
+        assert.deepEqual(snapshot.sessions, [
+          {
+            sessionId: 'thread-exec', provider: 'codex', startedAt: 5_000, lastSeq: 0,
+            canInterrupt: false, statusText: 'Running in the Codex CLI',
+          },
+          {
+            sessionId: 'thread-legacy', provider: 'codex', startedAt: 7_000, lastSeq: 0,
+            canInterrupt: false, statusText: 'Running in the Codex CLI',
+          },
+        ]);
+        assert.deepEqual(snapshot.idleProcessSessionIds, ['app-tui']);
+
+        live = [];
+        const after = await sessionsService.readSessionLiveness();
+        assert.deepEqual(after.sessions, []);
+        assert.deepEqual(after.idleProcessSessionIds, []);
       });
     });
   });

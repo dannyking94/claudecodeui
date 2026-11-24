@@ -7,6 +7,7 @@ import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/i
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { claudeSecretaryActivity } from '@/modules/providers/list/claude/claude-secretary-activity.provider.js';
 import { listLiveClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
+import { codexCliLiveness } from '@/modules/providers/services/codex-cli-liveness.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
 import { workerDeathwatch } from '@/modules/providers/services/worker-deathwatch.service.js';
@@ -378,12 +379,41 @@ async function readCurrentContextHistory(
 }
 
 /**
- * The running sessions, given the live Claude CLI sessions from one registry
- * scan: chat runs, background work that outlived its turn, then CLI turns.
+ * A CLI process outside CloudCLI that is still alive, tagged with the CLI it
+ * belongs to: claude from its session registry, codex from the rollout file
+ * the process holds open.
  */
-function collectRunningSessions(
-  liveCliSessions: Awaited<ReturnType<typeof listLiveClaudeCliSessions>>,
-): RunningSessionEntry[] {
+type LiveCliSession = Awaited<ReturnType<typeof listLiveClaudeCliSessions>>[number] & {
+  cli: 'claude' | 'codex';
+};
+
+/** Both CLIs' live processes, from one scan each. */
+async function listLiveCliSessions(): Promise<LiveCliSession[]> {
+  const [claude, codex] = await Promise.all([listLiveClaudeCliSessions(), codexCliLiveness.listLiveSessions()]);
+  return [
+    ...claude.map((live) => ({ ...live, cli: 'claude' as const })),
+    ...codex.map((live) => ({ ...live, cli: 'codex' as const })),
+  ];
+}
+
+/**
+ * The row a live CLI process belongs to. A codex row is keyed by its thread id
+ * as provider id; a legacy codex row whose app id is the thread id itself
+ * resolves through the second lookup. Claude keeps its single lookup.
+ */
+function findLiveCliRow(live: LiveCliSession) {
+  const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+  if (session || live.cli === 'claude') {
+    return session;
+  }
+  return sessionsDb.getSessionById(live.providerSessionId);
+}
+
+/**
+ * The running sessions, given the live claude and codex CLI processes from one
+ * scan each: chat runs, background work that outlived its turn, then CLI turns.
+ */
+function collectRunningSessions(liveCliSessions: LiveCliSession[]): RunningSessionEntry[] {
   const entries: RunningSessionEntry[] = chatRunRegistry.listRunningRuns();
   const runningById = new Map(entries.map((entry) => [entry.sessionId, entry]));
 
@@ -416,7 +446,7 @@ function collectRunningSessions(
     if (!live.isBusy) {
       continue;
     }
-    const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+    const session = findLiveCliRow(live);
     if (!session || runningById.has(session.session_id)) {
       continue;
     }
@@ -429,7 +459,7 @@ function collectRunningSessions(
       // There is no run here to abort: the turn belongs to a CLI process
       // CloudCLI does not own, so it can be reported but not interrupted.
       canInterrupt: false,
-      statusText: 'Running in the Claude CLI',
+      statusText: live.cli === 'codex' ? 'Running in the Codex CLI' : 'Running in the Claude CLI',
     });
     runningById.set(session.session_id, entries[entries.length - 1]);
   }
@@ -453,7 +483,7 @@ export const sessionsService = {
    * indicators should not attach to chat streams or request replayed messages.
    */
   async listRunningSessions(): Promise<RunningSessionEntry[]> {
-    return collectRunningSessions(await listLiveClaudeCliSessions());
+    return collectRunningSessions(await listLiveCliSessions());
   },
 
   /**
@@ -469,7 +499,7 @@ export const sessionsService = {
    * idle list — the running entry says more.
    */
   async readSessionLiveness(): Promise<SessionLivenessSnapshot> {
-    const liveCliSessions = await listLiveClaudeCliSessions();
+    const liveCliSessions = await listLiveCliSessions();
     const sessions = collectRunningSessions(liveCliSessions);
     const runningSessionIds = new Set(sessions.map((session) => session.sessionId));
 
@@ -496,7 +526,7 @@ export const sessionsService = {
       if (live.isBusy) {
         continue;
       }
-      const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+      const session = findLiveCliRow(live);
       if (session && !runningSessionIds.has(session.session_id)) {
         idleProcessSessionIds.add(session.session_id);
       }
